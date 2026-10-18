@@ -1,0 +1,9 @@
+target/
+logs_mensageria.txt
+*.log
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/

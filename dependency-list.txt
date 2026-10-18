@@ -1,0 +1,9 @@
+
+The following files have been resolved:
+   com.rabbitmq:amqp-client:jar:5.16.0:compile[36m -- module com.rabbitmq.client[0;1m [auto][m
+   com.fasterxml.jackson.core:jackson-core:jar:2.15.2:compile[36m -- module com.fasterxml.jackson.core[m
+   com.fasterxml.jackson.core:jackson-databind:jar:2.15.2:compile[36m -- module com.fasterxml.jackson.databind[m
+   com.fasterxml.jackson.core:jackson-annotations:jar:2.15.2:compile[36m -- module com.fasterxml.jackson.annotation[m
+   org.slf4j:slf4j-api:jar:1.7.36:compile[36m -- module org.slf4j[0;1m [auto][m
+   org.slf4j:slf4j-simple:jar:1.7.36:compile[36m -- module org.slf4j.simple[0;1m [auto][m
+
