@@ -30,3 +30,19 @@ The working directory did not contain a Git repository before this task, so no p
 ## Concerns
 
 - Existing compiler output still reports unrelated unchecked-operation warnings in `consumer/Consumidor2.java`; producer and consumer behavior was intentionally left unchanged.
+
+## Review finding fixes — 2026-10-18
+
+Status: Complete.
+
+- `MessageCodec.validate` now requires non-blank `producer` and `routingKey` for both encoding and decoding.
+- Added coverage for null and blank producer/routing key values on both paths, including exact validation messages.
+- Enabled Jackson `FAIL_ON_TRAILING_TOKENS`, so a valid JSON message followed by another JSON value is rejected as `MessageValidationException`.
+- Kept `schemaVersion=1`, `Instant` ISO-8601 serialization, UTF-8 encoding, cause-preserving exceptions, and producer/consumer code unchanged.
+
+### Covering tests and output
+
+- `mvn -q -Dtest=MessageCodecTest test` — JDK 25 (`Temurin 25.0.4`): **14 tests passed, 0 failures, 0 errors, 0 skipped**.
+- `mvn -q clean test` — JDK 25 (`Temurin 25.0.4`): **28 tests passed, 0 failures, 0 errors, 0 skipped**.
+
+The full-test command also emitted the existing console logging output from producer/consumer tests; it completed successfully with exit code 0.

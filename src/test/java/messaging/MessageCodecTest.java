@@ -80,6 +80,58 @@ class MessageCodecTest {
     }
 
     @Test
+    void rejectsNullProducerWhenEncodingAndDecoding() {
+        Message message = new Message(1, "id", "content", Instant.now(), null, "routing");
+
+        assertEquals("producer must not be blank",
+                assertThrows(MessageValidationException.class, () -> codec.encode(message))
+                        .getMessage());
+        assertEquals("producer must not be blank",
+                assertThrows(MessageValidationException.class,
+                        () -> codec.decode(jsonFor(message).getBytes(StandardCharsets.UTF_8)))
+                        .getMessage());
+    }
+
+    @Test
+    void rejectsBlankProducerWhenEncodingAndDecoding() {
+        Message message = new Message(1, "id", "content", Instant.now(), " ", "routing");
+
+        assertEquals("producer must not be blank",
+                assertThrows(MessageValidationException.class, () -> codec.encode(message))
+                        .getMessage());
+        assertEquals("producer must not be blank",
+                assertThrows(MessageValidationException.class,
+                        () -> codec.decode(jsonFor(message).getBytes(StandardCharsets.UTF_8)))
+                        .getMessage());
+    }
+
+    @Test
+    void rejectsNullRoutingKeyWhenEncodingAndDecoding() {
+        Message message = new Message(1, "id", "content", Instant.now(), "producer", null);
+
+        assertEquals("routingKey must not be blank",
+                assertThrows(MessageValidationException.class, () -> codec.encode(message))
+                        .getMessage());
+        assertEquals("routingKey must not be blank",
+                assertThrows(MessageValidationException.class,
+                        () -> codec.decode(jsonFor(message).getBytes(StandardCharsets.UTF_8)))
+                        .getMessage());
+    }
+
+    @Test
+    void rejectsBlankRoutingKeyWhenEncodingAndDecoding() {
+        Message message = new Message(1, "id", "content", Instant.now(), "producer", " ");
+
+        assertEquals("routingKey must not be blank",
+                assertThrows(MessageValidationException.class, () -> codec.encode(message))
+                        .getMessage());
+        assertEquals("routingKey must not be blank",
+                assertThrows(MessageValidationException.class,
+                        () -> codec.decode(jsonFor(message).getBytes(StandardCharsets.UTF_8)))
+                        .getMessage());
+    }
+
+    @Test
     void rejectsMalformedJsonWithCause() {
         MessageValidationException exception = assertThrows(
                 MessageValidationException.class,
@@ -87,6 +139,17 @@ class MessageCodecTest {
 
         assertEquals("Invalid message payload", exception.getMessage());
         assertInstanceOf(Exception.class, exception.getCause());
+    }
+
+    @Test
+    void rejectsValidJsonFollowedByTrailingJson() {
+        byte[] payload = (
+                "{\"schemaVersion\":1,\"messageId\":\"id\",\"content\":\"content\","
+                        + "\"createdAt\":\"2026-10-18T15:20:00Z\",\"producer\":\"producer\","
+                        + "\"routingKey\":\"routing\"}{\"unexpected\":true}")
+                .getBytes(StandardCharsets.UTF_8);
+
+        assertThrows(MessageValidationException.class, () -> codec.decode(payload));
     }
 
     @Test
@@ -106,5 +169,18 @@ class MessageCodecTest {
         String json = new String(codec.encode(message), StandardCharsets.UTF_8);
 
         assertTrue(json.contains("\"createdAt\":\"2026-10-18T15:20:00Z\""));
+    }
+
+    private String jsonFor(Message message) {
+        return "{\"schemaVersion\":" + message.schemaVersion()
+                + ",\"messageId\":\"" + message.messageId()
+                + "\",\"content\":\"" + message.content()
+                + "\",\"createdAt\":\"" + message.createdAt()
+                + "\",\"producer\":" + jsonStringOrNull(message.producer())
+                + ",\"routingKey\":" + jsonStringOrNull(message.routingKey()) + "}";
+    }
+
+    private String jsonStringOrNull(String value) {
+        return value == null ? "null" : "\"" + value + "\"";
     }
 }

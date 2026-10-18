@@ -19,6 +19,7 @@ public final class MessageCodec {
         objectMapper = JsonMapper.builder()
                 .addModule(new JavaTimeModule())
                 .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
                 .build();
         objectMapper.disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
     }
@@ -61,6 +62,8 @@ public final class MessageCodec {
         if (message.createdAt() == null) {
             throw new MessageValidationException("createdAt must not be null");
         }
+        requireNonBlank(message.producer(), "producer");
+        requireNonBlank(message.routingKey(), "routingKey");
     }
 
     private static void requireNonBlank(String value, String fieldName) {
