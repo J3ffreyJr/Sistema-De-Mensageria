@@ -74,8 +74,26 @@ Palavras-passe são redigidas no `toString()` da configuração.
 mvn clean test
 ```
 
-Os testes são unitários e não iniciam Docker nem dependem de um broker ativo.
-O Compose é apenas uma conveniência para desenvolvimento e testes manuais.
+Este comando executa os testes unitários e os testes de integração são
+ignorados; não inicia Docker nem depende de um broker ativo.
+
+Para a validação end-to-end opt-in, primeiro inicie o broker:
+
+```powershell
+Copy-Item .env.example .env
+docker compose up -d
+mvn verify -Pintegration
+```
+
+O perfil `integration` ativa testes com filas efémeras (e mensagens com IDs
+únicos), confirma publicações obrigatórias, valida roteamento, acknowledgements
+manuais, recuperação da ligação, idempotência e dead-letter. Uma execução
+bem-sucedida termina com `BUILD SUCCESS`; sem o perfil, todos estes testes são
+ignorados de forma limpa. Para parar o broker mantendo os dados use
+`docker compose stop`; para remover também o volume e começar de um broker
+efémero use `docker compose down -v`. O broker local persistente (volume
+`rabbitmq-data`) é diferente do modo efémero usado por CI, que deve usar um
+volume novo ou uma instância RabbitMQ isolada.
 
 Para executar o produtor ou um consumidor depois de iniciar o broker, compile
 com Maven e execute a classe Java correspondente usando o classpath gerado.
