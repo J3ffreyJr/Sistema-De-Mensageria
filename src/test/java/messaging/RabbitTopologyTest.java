@@ -29,6 +29,14 @@ class RabbitTopologyTest {
         assertTrue(calls.contains("queueBind:fila_consumidor2:ambos"));
         assertTrue(calls.stream().anyMatch(call -> call.startsWith("queueDeclare:fila_consumidor1_retry:true:")));
         assertTrue(calls.stream().anyMatch(call -> call.startsWith("queueDeclare:fila_consumidor2_retry:true:")));
+        assertTrue(calls.stream().anyMatch(call -> call.contains("fila_consumidor1:true:")
+                && call.contains("x-dead-letter-exchange=exchange_direto.retry")
+                && call.contains("x-dead-letter-routing-key=consumidor1.retry.1")));
+        assertTrue(calls.stream().anyMatch(call -> call.contains("fila_consumidor2:true:")
+                && call.contains("x-dead-letter-exchange=exchange_direto.retry")
+                && call.contains("x-dead-letter-routing-key=consumidor2.retry.1")));
+        assertTrue(calls.contains("queueBind:fila_consumidor1_retry:consumidor1.retry.1"));
+        assertTrue(calls.contains("queueBind:fila_consumidor2_retry:consumidor2.retry.1"));
         assertTrue(calls.stream().anyMatch(call -> call.startsWith("queueDeclare:fila_consumidor1_dead_letter:true:")));
         assertTrue(calls.stream().anyMatch(call -> call.startsWith("queueDeclare:fila_consumidor2_dead_letter:true:")));
         assertTrue(calls.contains("queueBind:fila_consumidor1_dead_letter:consumidor1"));

@@ -27,8 +27,10 @@ public final class RabbitTopology {
             channel.exchangeDeclare(RETRY_EXCHANGE, "direct", true);
             channel.exchangeDeclare(DEAD_LETTER_EXCHANGE, "direct", true);
 
-            declareConsumerQueue(channel, RabbitMQConfig.QUEUE_CONSUMIDOR1, RabbitMQConfig.ROUTING_KEY_1);
-            declareConsumerQueue(channel, RabbitMQConfig.QUEUE_CONSUMIDOR2, RabbitMQConfig.ROUTING_KEY_2);
+            declareConsumerQueue(channel, RabbitMQConfig.QUEUE_CONSUMIDOR1, RabbitMQConfig.ROUTING_KEY_1,
+                    RETRY_ROUTING_KEY_1);
+            declareConsumerQueue(channel, RabbitMQConfig.QUEUE_CONSUMIDOR2, RabbitMQConfig.ROUTING_KEY_2,
+                    RETRY_ROUTING_KEY_2);
             declareRetryQueue(channel, RETRY_QUEUE_1, RETRY_ROUTING_KEY_1, RETRY_ROUTING_KEY_1_EXHAUSTED);
             declareRetryQueue(channel, RETRY_QUEUE_2, RETRY_ROUTING_KEY_2, RETRY_ROUTING_KEY_2_EXHAUSTED);
             declareExhaustedRetryQueue(channel, RETRY_QUEUE_1_EXHAUSTED,
@@ -42,10 +44,11 @@ public final class RabbitTopology {
         }
     }
 
-    private void declareConsumerQueue(Channel channel, String queue, String routingKey) throws IOException {
+    private void declareConsumerQueue(Channel channel, String queue, String routingKey,
+                                      String firstRetryRoutingKey) throws IOException {
         channel.queueDeclare(queue, true, false, false, Map.of(
                 "x-dead-letter-exchange", RETRY_EXCHANGE,
-                "x-dead-letter-routing-key", routingKey + ".retry"));
+                "x-dead-letter-routing-key", firstRetryRoutingKey));
         channel.queueBind(queue, RabbitMQConfig.EXCHANGE_NAME, routingKey);
         channel.queueBind(queue, RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.ROUTING_KEY_ALL);
     }

@@ -43,3 +43,21 @@
 
 - A live RabbitMQ broker is still required to execute the opt-in integration test. Configure `RABBITMQ_HOST`, `RABBITMQ_PORT`, `RABBITMQ_VHOST`, `RABBITMQ_USERNAME`, and `RABBITMQ_PASSWORD`, then run `mvn -Drabbitmq.integration=true test`.
 - Existing producer and consumer mains remain unchanged.
+
+## Fix report — remaining Task 3 review finding (2026-10-18)
+
+### Finding addressed
+
+Consumer queues now set `x-dead-letter-routing-key` to their corresponding
+first-stage retry routing keys (`consumidor1.retry.1` and
+`consumidor2.retry.1`). Behavioral topology assertions verify that each
+consumer queue's dead-letter routing key matches the binding used by its first
+retry queue, while preserving the existing bounded second-stage retry and
+dead-letter chain.
+
+### Verification
+
+- Focused topology tests pass with JDK 25:
+  `mvn -q -Dtest=RabbitTopologyTest test`
+- Full Maven suite passes with JDK 25:
+  `mvn clean test`
