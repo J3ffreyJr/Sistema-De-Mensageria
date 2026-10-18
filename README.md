@@ -14,34 +14,58 @@ Protótipo Java 25 com RabbitMQ e Maven.
 docker compose up -d
 ```
 
-O Compose cria o utilizador de desenvolvimento `dev` com a palavra-passe
-`dev-password`, expõe AMQP em `localhost:5672` e a consola de gestão em
-<http://localhost:15672>. Os dados ficam no volume nomeado `rabbitmq-data`.
-Para parar o broker sem remover os dados, use `docker compose stop`; para
-remover também o volume, use `docker compose down -v`.
+O Compose lê as credenciais de um ficheiro `.env` ignorado pelo Git. Prepare e
+inicie o broker assim (PowerShell):
+
+```powershell
+Copy-Item .env.example .env
+docker compose up -d
+$env:RABBITMQ_HOST = "localhost"
+$env:RABBITMQ_PORT = "5672"
+$env:RABBITMQ_VHOST = "/"
+$env:RABBITMQ_USERNAME = "dev"
+$env:RABBITMQ_PASSWORD = "dev-password"
+$env:RABBITMQ_TLS_ENABLED = "false"
+```
+
+O exemplo cria o utilizador `dev` com a palavra-passe `dev-password`, expõe
+AMQP em `localhost:5672` e a consola de gestão em <http://localhost:15672>.
+Os dados ficam no volume nomeado `rabbitmq-data`. Para parar o broker sem
+remover os dados, use `docker compose stop`; para remover também o volume,
+use `docker compose down -v`. Em Bash, use `cp .env.example .env`, os mesmos
+comandos `docker compose` e `export` para as seis variáveis.
 
 Como alternativa, instale RabbitMQ localmente e forneça as credenciais através
 das variáveis abaixo.
 
 ## Configuração
 
-Sem variáveis, a configuração usa os valores locais compatíveis com o broker
-RabbitMQ padrão (`localhost`, porta `5672`, vhost `/`, utilizador `guest`,
-palavra-passe `guest`, TLS desativado). Em ambientes reais, forneça credenciais
-por secrets; não coloque palavras-passe no código ou no controlo de versões.
+Host, porta, vhost e TLS têm defaults locais (`localhost`, `5672`, `/` e
+`false`). `RABBITMQ_USERNAME` e `RABBITMQ_PASSWORD` são obrigatórias e falham
+com uma mensagem clara quando não são fornecidas. Em ambientes reais, forneça
+credenciais por secrets; não coloque palavras-passe no código ou no controlo
+de versões.
 
 | Variável | Padrão | Descrição |
 | --- | --- | --- |
 | `RABBITMQ_HOST` | `localhost` | Host do broker |
 | `RABBITMQ_PORT` | `5672` | Porta AMQP |
 | `RABBITMQ_VHOST` | `/` | Virtual host |
-| `RABBITMQ_USERNAME` | `guest` | Utilizador |
-| `RABBITMQ_PASSWORD` | `guest` | Palavra-passe |
+| `RABBITMQ_USERNAME` | obrigatório | Utilizador |
+| `RABBITMQ_PASSWORD` | obrigatório | Palavra-passe |
 | `RABBITMQ_TLS_ENABLED` | `false` | `true` ou `false` |
 
 Também são aceites propriedades Java equivalentes (`rabbitmq.host`,
 `rabbitmq.port`, `rabbitmq.vhost`, `rabbitmq.username`, `rabbitmq.password` e
-`rabbitmq.tlsEnabled`) quando não existe a variável de ambiente correspondente.
+`rabbitmq.tlsEnabled`) quando não existe a variável de ambiente correspondente;
+as variáveis de ambiente têm precedência. Por exemplo, para uma execução sem
+variáveis de ambiente:
+
+```powershell
+java -Drabbitmq.username=dev -Drabbitmq.password=dev-password `
+  -cp target\classes <classe-principal>
+```
+
 Palavras-passe são redigidas no `toString()` da configuração.
 
 ## Compilar e testar

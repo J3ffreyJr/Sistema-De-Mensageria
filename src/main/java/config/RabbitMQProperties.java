@@ -13,8 +13,6 @@ public record RabbitMQProperties(
     private static final String DEFAULT_HOST = "localhost";
     private static final int DEFAULT_PORT = 5672;
     private static final String DEFAULT_VHOST = "/";
-    private static final String DEFAULT_USERNAME = "guest";
-    private static final String DEFAULT_PASSWORD = "guest";
 
     public RabbitMQProperties {
         if (host == null || host.isBlank()) {
@@ -40,9 +38,26 @@ public record RabbitMQProperties(
                 value(values, "RABBITMQ_HOST", "rabbitmq.host", DEFAULT_HOST),
                 parsePort(value(values, "RABBITMQ_PORT", "rabbitmq.port", String.valueOf(DEFAULT_PORT))),
                 value(values, "RABBITMQ_VHOST", "rabbitmq.vhost", DEFAULT_VHOST),
-                value(values, "RABBITMQ_USERNAME", "rabbitmq.username", DEFAULT_USERNAME),
-                value(values, "RABBITMQ_PASSWORD", "rabbitmq.password", DEFAULT_PASSWORD),
+                requiredValue(values, "RABBITMQ_USERNAME", "rabbitmq.username", "username"),
+                requiredValue(values, "RABBITMQ_PASSWORD", "rabbitmq.password", "password"),
                 parseTls(value(values, "RABBITMQ_TLS_ENABLED", "rabbitmq.tlsEnabled", "false")));
+    }
+
+    private static String requiredValue(
+            Map<String, String> environment,
+            String environmentName,
+            String propertyName,
+            String label) {
+        String value = environment.get(environmentName);
+        if (value == null) {
+            value = System.getProperty(propertyName);
+        }
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(
+                    "RabbitMQ %s must be provided via %s or -D%s"
+                            .formatted(label, environmentName, propertyName));
+        }
+        return value.trim();
     }
 
     private static String value(
