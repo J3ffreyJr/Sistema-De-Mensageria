@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -55,6 +56,23 @@ class RabbitConnectionManagerTest {
 
         assertTrue(manager.isConnected());
         assertDoesNotThrow(() -> manager.createChannel().close());
+        manager.close();
+    }
+
+    @Test
+    void notifiesPublishersWithAChannelCreatedAfterRecovery() {
+        RabbitConnectionManager manager = new RabbitConnectionManager(
+                new RabbitMQProperties("localhost", 5672, "/", "user", "password", false),
+                factoryReturning(new AtomicInteger(), new AtomicInteger()),
+                new RabbitTopology(), 2, Duration.ZERO);
+        AtomicReference<Channel> recovered = new AtomicReference<>();
+
+        manager.open();
+        manager.addRecoveryListener(recovered::set);
+        manager.recoverNowForTest();
+
+        assertNotNull(recovered.get());
+        assertDoesNotThrow(() -> recovered.get().close());
         manager.close();
     }
 
