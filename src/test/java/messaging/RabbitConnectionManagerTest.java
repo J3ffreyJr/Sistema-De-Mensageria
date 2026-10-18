@@ -43,6 +43,21 @@ class RabbitConnectionManagerTest {
         assertFalse(manager.isConnected());
     }
 
+    @Test
+    void boundedRecoveryRecreatesAUsableChannelPath() {
+        RabbitConnectionManager manager = new RabbitConnectionManager(
+                new RabbitMQProperties("localhost", 5672, "/", "user", "password", false),
+                factoryReturning(new AtomicInteger(), new AtomicInteger()),
+                new RabbitTopology(), 2, Duration.ZERO);
+
+        manager.open();
+        manager.recoverNowForTest();
+
+        assertTrue(manager.isConnected());
+        assertDoesNotThrow(() -> manager.createChannel().close());
+        manager.close();
+    }
+
     private static ConnectionFactory factoryReturning(AtomicInteger channelCloses, AtomicInteger connectionCloses) {
         ConnectionFactory factory = new ConnectionFactory() {
             @Override

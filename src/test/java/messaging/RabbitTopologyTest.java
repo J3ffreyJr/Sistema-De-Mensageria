@@ -21,18 +21,27 @@ class RabbitTopologyTest {
         new RabbitTopology().declare(channel);
 
         assertTrue(calls.contains("exchangeDeclare:exchange_direto:direct:true"));
-        assertTrue(calls.contains("queueDeclare:fila_consumidor1:true"));
-        assertTrue(calls.contains("queueDeclare:fila_consumidor2:true"));
+        assertTrue(calls.stream().anyMatch(call -> call.startsWith("queueDeclare:fila_consumidor1:true:")));
+        assertTrue(calls.stream().anyMatch(call -> call.startsWith("queueDeclare:fila_consumidor2:true:")));
         assertTrue(calls.contains("queueBind:fila_consumidor1:consumidor1"));
         assertTrue(calls.contains("queueBind:fila_consumidor1:ambos"));
         assertTrue(calls.contains("queueBind:fila_consumidor2:consumidor2"));
         assertTrue(calls.contains("queueBind:fila_consumidor2:ambos"));
-        assertTrue(calls.contains("queueDeclare:fila_consumidor1_retry:true"));
-        assertTrue(calls.contains("queueDeclare:fila_consumidor2_retry:true"));
-        assertTrue(calls.contains("queueDeclare:fila_consumidor1_dead_letter:true"));
-        assertTrue(calls.contains("queueDeclare:fila_consumidor2_dead_letter:true"));
+        assertTrue(calls.stream().anyMatch(call -> call.startsWith("queueDeclare:fila_consumidor1_retry:true:")));
+        assertTrue(calls.stream().anyMatch(call -> call.startsWith("queueDeclare:fila_consumidor2_retry:true:")));
+        assertTrue(calls.stream().anyMatch(call -> call.startsWith("queueDeclare:fila_consumidor1_dead_letter:true:")));
+        assertTrue(calls.stream().anyMatch(call -> call.startsWith("queueDeclare:fila_consumidor2_dead_letter:true:")));
         assertTrue(calls.contains("queueBind:fila_consumidor1_dead_letter:consumidor1"));
         assertTrue(calls.contains("queueBind:fila_consumidor2_dead_letter:consumidor2"));
+        assertTrue(calls.stream().anyMatch(call -> call.contains("fila_consumidor1_retry")
+                && call.contains("x-dead-letter-exchange=exchange_direto.retry")
+                && call.contains("x-dead-letter-routing-key=consumidor1.retry.2")));
+        assertTrue(calls.stream().anyMatch(call -> call.contains("fila_consumidor2_retry")
+                && call.contains("x-dead-letter-exchange=exchange_direto.retry")
+                && call.contains("x-dead-letter-routing-key=consumidor2.retry.2")));
+        assertTrue(calls.stream().anyMatch(call -> call.contains("fila_consumidor1_retry_exhausted")
+                && call.contains("x-dead-letter-exchange=exchange_direto.dead-letter")
+                && call.contains("x-dead-letter-routing-key=consumidor1")));
         assertEquals(3, calls.stream().filter(call -> call.startsWith("exchangeDeclare:exchange_direto")).count());
     }
 
@@ -44,7 +53,7 @@ class RabbitTopologyTest {
                     if (method.getName().equals("exchangeDeclare")) {
                         calls.add("exchangeDeclare:" + args[0] + ":" + args[1] + ":" + args[2]);
                     } else if (method.getName().equals("queueDeclare")) {
-                        calls.add("queueDeclare:" + args[0] + ":" + args[1]);
+                        calls.add("queueDeclare:" + args[0] + ":" + args[1] + ":" + args[4]);
                     } else if (method.getName().equals("queueBind")) {
                         calls.add("queueBind:" + args[0] + ":" + args[2]);
                     }

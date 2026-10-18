@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class RabbitConnectionManager implements AutoCloseable {
     private final RabbitMQProperties properties;
@@ -18,6 +19,7 @@ public final class RabbitConnectionManager implements AutoCloseable {
     private final int maxAttempts;
     private final Duration backoff;
     private final Set<Channel> channels = ConcurrentHashMap.newKeySet();
+    private final AtomicBoolean recoveryRunning = new AtomicBoolean();
     private volatile Connection connection;
     private volatile boolean closing;
 
@@ -43,8 +45,7 @@ public final class RabbitConnectionManager implements AutoCloseable {
         Exception last = null;
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
-                connection = factory.newConnection();
-                topology.declare(createChannel());
+                installConnection(factory.newConnection());
                 return;
             } catch (Exception exception) {
                 last = exception;
@@ -56,7 +57,7 @@ public final class RabbitConnectionManager implements AutoCloseable {
                 + properties.host() + ":" + properties.port(), last);
     }
 
-    public Channel createChannel() {
+    public synchronized Channel createChannel() {
         Connection active = connection;
         if (closing || active == null || !active.isOpen()) {
             throw new RabbitConnectionException("RabbitMQ connection is not open");
@@ -73,6 +74,70 @@ public final class RabbitConnectionManager implements AutoCloseable {
     public boolean isConnected() {
         Connection active = connection;
         return !closing && active != null && active.isOpen();
+    }
+
+    private synchronized void installConnection(Connection newConnection) throws IOException {
+        newConnection.addShutdownListener(cause -> {
+            if (!closing && recoveryRunning.compareAndSet(false, true)) {
+                Thread recovery = new Thread(() -> {
+                    try {
+                        recover();
+                    } finally {
+                        recoveryRunning.set(false);
+                    }
+                }, "rabbitmq-recovery");
+                recovery.setDaemon(true);
+                recovery.start();
+            }
+        });
+        connection = newConnection;
+        topology.declare(createChannel());
+    }
+
+    private synchronized void recover() {
+        if (closing || isConnected()) {
+            return;
+        }
+        Exception last = null;
+        for (int attempt = 1; attempt <= maxAttempts && !closing; attempt++) {
+            try {
+                closeQuietly();
+                installConnection(factory.newConnection());
+                return;
+            } catch (Exception exception) {
+                last = exception;
+                closeQuietly();
+                if (attempt < maxAttempts) {
+                    sleepBackoff();
+                }
+            }
+        }
+        if (!closing) {
+            throw new RabbitConnectionException("Unable to recover RabbitMQ connection", last);
+        }
+    }
+
+    /** Deterministic hook used by the opt-in integration test to exercise recovery. */
+    void recoverNowForTest() {
+        if (!recoveryRunning.compareAndSet(false, true)) {
+            throw new RabbitConnectionException("RabbitMQ recovery is already in progress");
+        }
+        try {
+            synchronized (this) {
+                Connection active = connection;
+                if (active != null) {
+                    try {
+                        active.close();
+                    } catch (Exception ignored) {
+                        // Recovery below still verifies that a new connection can be established.
+                    }
+                    connection = null;
+                }
+            }
+            recover();
+        } finally {
+            recoveryRunning.set(false);
+        }
     }
 
     @Override
