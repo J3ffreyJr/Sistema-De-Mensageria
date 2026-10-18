@@ -1,80 +1,40 @@
 package consumer;
 
-import com.rabbitmq.client.*;
 import config.RabbitMQConfig;
-import messaging.Message;
-import messaging.MessageCodec;
+import config.RabbitMQProperties;
+import messaging.*;
 import utility.Registo;
 
-public class Consumidor1 {
-    
-    private static final MessageCodec messageCodec = new MessageCodec();
-    private static int totalMensagensProcessadas = 0;
-    
+public final class Consumidor1 {
     public static void main(String[] args) {
-        Registo.logInfo("=== SISTEMA CONSUMIDOR 1 INICIADO ===");
-        
-        try {
-            ConnectionFactory factory = RabbitMQConfig.getConnectionFactory();
-            Connection connection = factory.newConnection();
-            Channel channel = connection.createChannel();
- 
-            channel.exchangeDeclare(RabbitMQConfig.EXCHANGE_NAME, "direct", true);
-            channel.queueDeclare(RabbitMQConfig.QUEUE_CONSUMIDOR1, true, false, false, null);
+        run("Consumidor1", RabbitMQConfig.QUEUE_CONSUMIDOR1);
+    }
 
-            channel.queueBind(RabbitMQConfig.QUEUE_CONSUMIDOR1, RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.ROUTING_KEY_1);
-            channel.queueBind(RabbitMQConfig.QUEUE_CONSUMIDOR1, RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.ROUTING_KEY_ALL);
-            
-            Registo.logInfo("Consumidor 1 conectado ao RabbitMQ");
-            Registo.logInfo("Aguardando mensagens das filas: " + RabbitMQConfig.QUEUE_CONSUMIDOR1);
-            System.out.println("\n🟢 CONSUMIDOR 1 ATIVO - Pressione Ctrl+C para parar\n");
-
-            DeliverCallback deliverCallback = (consumerTag, delivery) -> {
-                processarMensagem(delivery.getBody(), "Consumidor1");
-            };
-  
-            channel.basicConsume(RabbitMQConfig.QUEUE_CONSUMIDOR1, true, deliverCallback, consumerTag -> {});
-     
-            while (true) {
-                Thread.sleep(1000);
-            }
-            
-        } catch (Exception e) {
-            Registo.logErro("N/A", "Conexão Consumidor1", e.getMessage());
+    static void run(String name, String queue) {
+        Registo.logInfo("=== SISTEMA " + name + " INICIADO ===");
+        RabbitMQProperties properties = RabbitMQProperties.fromEnvironment(System.getenv());
+        try (RabbitConnectionManager manager = new RabbitConnectionManager(properties);
+             RabbitConsumer consumer = new RabbitConsumer(manager, queue, message -> process(name, message))) {
+            consumer.start();
+            Registo.logInfo(name + " conectado ao RabbitMQ; aguardando mensagens em " + queue);
+            System.out.println("\n🟢 " + name.toUpperCase() + " ATIVO - Pressione Ctrl+C para parar\n");
+            while (!Thread.currentThread().isInterrupted()) Thread.sleep(1000);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        } catch (Exception failure) {
+            Registo.logErro("N/A", "Conexão " + name, failure.getMessage());
         }
     }
-    
-    private static void processarMensagem(byte[] payload, String nomeConsumidor) {
-        String messageId = "DESCONHECIDO";
-        String conteudo = "N/A";
-        String status = "SUCESSO";
-        
+
+    private static void process(String name, Message message) {
         try {
-           
-            Message mensagem = messageCodec.decode(payload);
-            messageId = mensagem.messageId();
-            conteudo = mensagem.content();
-            String routingKey = mensagem.routingKey();
-         
-            Thread.sleep(1000 + (long)(Math.random() * 500));
-            
-            totalMensagensProcessadas++;
-  
-            String logConteudo = String.format("Conteúdo: \"%s\" | RoutingKey: %s | Por: %s", 
-                                             conteudo, routingKey, nomeConsumidor);
-            Registo.logRecebimento(messageId, logConteudo, status);
-      
-            System.out.printf(" [CONSUMIDOR1] Processada: %s | Total: %d\n", 
-                            messageId, totalMensagensProcessadas);
-            
-        } catch (InterruptedException e) {
-            status = "INTERROMPIDO";
-            Registo.logErro(messageId, "Processamento Consumidor1", "Processamento interrompido");
+            Thread.sleep(1000);
+            Registo.logRecebimento(message.messageId(),
+                    "Conteúdo: \"" + message.content() + "\" | RoutingKey: "
+                            + message.routingKey() + " | Por: " + name, "SUCESSO");
+        } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
-        } catch (Exception e) {
-            status = "ERRO";
-            Registo.logErro(messageId, "Processamento Consumidor1", e.getMessage());
-            Registo.logRecebimento(messageId, "ERRO: payload inválido", status);
+            throw new IllegalStateException("Processamento interrompido", interrupted);
         }
     }
 }
