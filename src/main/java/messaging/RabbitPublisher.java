@@ -2,6 +2,7 @@ package messaging;
 
 import com.rabbitmq.client.AMQP;
 import com.rabbitmq.client.Channel;
+import com.rabbitmq.client.ShutdownSignalException;
 import config.RabbitMQConfig;
 import config.RabbitMQProperties;
 
@@ -17,13 +18,14 @@ public final class RabbitPublisher implements AutoCloseable {
     private final boolean ownsManager;
     private final Object publishLock = new Object();
     private final java.util.function.Consumer<Channel> recoveryListener;
+    private final com.rabbitmq.client.ShutdownListener shutdownListener;
 
     public RabbitPublisher(RabbitMQProperties properties) {
         this(new RabbitConnectionManager(properties), RabbitMQConfig.EXCHANGE_NAME, new MessageCodec(), true);
     }
 
     public RabbitPublisher(RabbitConnectionManager connectionManager) {
-        this(connectionManager, RabbitMQConfig.EXCHANGE_NAME, new MessageCodec(), true);
+        this(connectionManager, RabbitMQConfig.EXCHANGE_NAME, new MessageCodec(), false);
     }
 
     RabbitPublisher(Channel channel, String exchange, MessageCodec codec) {
@@ -33,8 +35,10 @@ public final class RabbitPublisher implements AutoCloseable {
         this.codec = codec;
         this.ownsManager = false;
         this.recoveryListener = null;
+        this.shutdownListener = cause -> failPendingPublish(cause);
         confirmChannel();
         installReturnListener();
+        installShutdownListener();
     }
 
     private RabbitPublisher(RabbitConnectionManager manager, String exchange, MessageCodec codec,
@@ -42,6 +46,7 @@ public final class RabbitPublisher implements AutoCloseable {
         manager.open();
         this.connectionManager = manager;
         this.channel = manager.createChannel();
+        this.shutdownListener = cause -> failPendingPublish(cause);
         confirmChannel();
         this.exchange = exchange;
         this.codec = codec;
@@ -52,6 +57,7 @@ public final class RabbitPublisher implements AutoCloseable {
                 this.channel = recovered;
                 confirmChannel();
                 installReturnListener();
+                installShutdownListener();
                 if (previous != null && previous.isOpen()) {
                     try {
                         previous.close();
@@ -62,6 +68,7 @@ public final class RabbitPublisher implements AutoCloseable {
             }
         };
         installReturnListener();
+        installShutdownListener();
         manager.addRecoveryListener(recoveryListener);
     }
 
@@ -81,6 +88,7 @@ public final class RabbitPublisher implements AutoCloseable {
                 public void handleAck(long deliveryTag, boolean multiple) {
                     if (pending.deliveryTag == deliveryTag || (multiple && pending.deliveryTag <= deliveryTag)) {
                         pending.confirmed.set(true);
+                        pending.completed.set(true);
                         pending.confirmationArrived.countDown();
                     }
                 }
@@ -88,6 +96,7 @@ public final class RabbitPublisher implements AutoCloseable {
                 @Override
                 public void handleNack(long deliveryTag, boolean multiple) {
                     if (pending.deliveryTag == deliveryTag || (multiple && pending.deliveryTag <= deliveryTag)) {
+                        pending.completed.set(true);
                         pending.confirmationArrived.countDown();
                     }
                 }
@@ -101,6 +110,10 @@ public final class RabbitPublisher implements AutoCloseable {
                 activeChannel.addConfirmListener(confirmListener);
                 activeChannel.basicPublish(exchange, message.routingKey(), true, properties, codec.encode(message));
                 pending.confirmationArrived.await();
+                PublishException failure = pending.failure.get();
+                if (failure != null) {
+                    throw failure;
+                }
                 String returned = pending.returnReason.get();
                 if (returned != null) {
                     return PublishResult.returned(returned);
@@ -148,6 +161,23 @@ public final class RabbitPublisher implements AutoCloseable {
         }
     }
 
+    private void installShutdownListener() {
+        try {
+            channel.addShutdownListener(shutdownListener);
+        } catch (RuntimeException exception) {
+            throw new PublishException("Unable to install publisher shutdown listener", exception);
+        }
+    }
+
+    private void failPendingPublish(ShutdownSignalException cause) {
+        PendingPublish pending = pendingPublish;
+        if (pending != null && pending.completed.compareAndSet(false, true)) {
+            pending.failure.compareAndSet(null,
+                    new PublishException("Publishing channel shut down before confirmation", cause));
+            pending.confirmationArrived.countDown();
+        }
+    }
+
     @Override
     public void close() {
         try {
@@ -168,6 +198,8 @@ public final class RabbitPublisher implements AutoCloseable {
         private final String messageId;
         private final AtomicReference<String> returnReason = new AtomicReference<>();
         private final AtomicReference<Boolean> confirmed = new AtomicReference<>(false);
+        private final AtomicReference<PublishException> failure = new AtomicReference<>();
+        private final java.util.concurrent.atomic.AtomicBoolean completed = new java.util.concurrent.atomic.AtomicBoolean();
         private final CountDownLatch confirmationArrived = new CountDownLatch(1);
         private long deliveryTag;
 

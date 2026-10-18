@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -119,6 +120,42 @@ class RabbitPublisherTest {
         RabbitPublisher publisher = new RabbitPublisher(channel, RabbitMQConfig.EXCHANGE_NAME, new MessageCodec());
 
         assertThrows(PublishException.class, () -> publisher.publish(message(RabbitMQConfig.ROUTING_KEY_1)));
+    }
+
+    @Test
+    void failsPromptlyWhenChannelShutsDownBeforeConfirmation() throws Exception {
+        AtomicReference<com.rabbitmq.client.ShutdownListener> shutdown = new AtomicReference<>();
+        Channel channel = (Channel) java.lang.reflect.Proxy.newProxyInstance(
+                Channel.class.getClassLoader(), new Class<?>[]{Channel.class}, (proxy, method, args) -> {
+                    if (method.getName().equals("confirmSelect")) return null;
+                    if (method.getName().equals("addReturnListener")) return null;
+                    if (method.getName().equals("addShutdownListener")) {
+                        shutdown.set((com.rabbitmq.client.ShutdownListener) args[0]);
+                        return null;
+                    }
+                    if (method.getName().equals("getNextPublishSeqNo")) return 1L;
+                    if (method.getName().equals("addConfirmListener")
+                            || method.getName().equals("removeConfirmListener")) return null;
+                    if (method.getName().equals("basicPublish")) {
+                        shutdown.get().shutdownCompleted(
+                                new com.rabbitmq.client.ShutdownSignalException(false, false, null, null));
+                        return null;
+                    }
+                    if (method.getName().equals("isOpen")) return true;
+                    return method.getReturnType().isPrimitive() ? false : null;
+                });
+        RabbitPublisher publisher = new RabbitPublisher(channel, RabbitMQConfig.EXCHANGE_NAME, new MessageCodec());
+
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<PublishResult> result =
+                    executor.submit(() -> publisher.publish(message(RabbitMQConfig.ROUTING_KEY_1)));
+            ExecutionException failure = assertThrows(ExecutionException.class,
+                    () -> result.get(1, TimeUnit.SECONDS));
+            assertInstanceOf(PublishException.class, failure.getCause());
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     private static Message message(String routingKey) {

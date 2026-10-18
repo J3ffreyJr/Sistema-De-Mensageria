@@ -6,9 +6,11 @@ import config.RabbitMQProperties;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.lang.reflect.Field;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class RabbitPublisherIntegrationTest {
@@ -55,6 +57,41 @@ class RabbitPublisherIntegrationTest {
             assertEquals(PublishResult.Status.RETURNED, result.status());
             assertNotEquals(PublishResult.Status.CONFIRMED, result.status());
         }
+    }
+
+    @Test
+    void recoversTwoPublishersWithIndependentConfirmedChannels() throws Exception {
+            assumeTrue(Boolean.getBoolean("rabbitmq.integration"));
+            RabbitMQProperties properties = RabbitMQProperties.fromEnvironment(System.getenv());
+            try (RabbitConnectionManager manager = new RabbitConnectionManager(properties);
+                 RabbitPublisher first = new RabbitPublisher(manager);
+                 RabbitPublisher second = new RabbitPublisher(manager)) {
+                assertNotSame(publisherChannel(first), publisherChannel(second));
+                assertEquals(PublishResult.Status.CONFIRMED,
+                        first.publish(message("publisher-1-" + System.nanoTime(),
+                                RabbitMQConfig.ROUTING_KEY_1)).status());
+                assertEquals(PublishResult.Status.CONFIRMED,
+                        second.publish(message("publisher-2-" + System.nanoTime(),
+                                RabbitMQConfig.ROUTING_KEY_2)).status());
+
+                manager.recoverNowForTest();
+
+                Channel recoveredFirst = publisherChannel(first);
+                Channel recoveredSecond = publisherChannel(second);
+                assertNotSame(recoveredFirst, recoveredSecond);
+                assertEquals(PublishResult.Status.CONFIRMED,
+                        first.publish(message("recovered-1-" + System.nanoTime(),
+                                RabbitMQConfig.ROUTING_KEY_1)).status());
+                assertEquals(PublishResult.Status.CONFIRMED,
+                        second.publish(message("recovered-2-" + System.nanoTime(),
+                                RabbitMQConfig.ROUTING_KEY_2)).status());
+            }
+    }
+
+    private static Channel publisherChannel(RabbitPublisher publisher) throws Exception {
+        Field channel = RabbitPublisher.class.getDeclaredField("channel");
+        channel.setAccessible(true);
+        return (Channel) channel.get(publisher);
     }
 
     private static Message message(String id, String routingKey) {
