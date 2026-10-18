@@ -11,6 +11,8 @@ import java.time.Duration;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 
 public final class RabbitConnectionManager implements AutoCloseable {
     private final RabbitMQProperties properties;
@@ -19,6 +21,7 @@ public final class RabbitConnectionManager implements AutoCloseable {
     private final int maxAttempts;
     private final Duration backoff;
     private final Set<Channel> channels = ConcurrentHashMap.newKeySet();
+    private final CopyOnWriteArrayList<Consumer<Channel>> recoveryListeners = new CopyOnWriteArrayList<>();
     private final AtomicBoolean recoveryRunning = new AtomicBoolean();
     private volatile Connection connection;
     private volatile boolean closing;
@@ -76,6 +79,19 @@ public final class RabbitConnectionManager implements AutoCloseable {
         return !closing && active != null && active.isOpen();
     }
 
+    /**
+     * Registers a callback which is invoked with a newly-created publishing
+     * channel after connection recovery. The callback is intentionally not
+     * invoked for the initial connection.
+     */
+    public void addRecoveryListener(Consumer<Channel> listener) {
+        recoveryListeners.add(listener);
+    }
+
+    public void removeRecoveryListener(Consumer<Channel> listener) {
+        recoveryListeners.remove(listener);
+    }
+
     private synchronized void installConnection(Connection newConnection) throws IOException {
         newConnection.addShutdownListener(cause -> {
             if (!closing && recoveryRunning.compareAndSet(false, true)) {
@@ -103,6 +119,8 @@ public final class RabbitConnectionManager implements AutoCloseable {
             try {
                 closeQuietly();
                 installConnection(factory.newConnection());
+                Channel recoveredChannel = createChannel();
+                recoveryListeners.forEach(listener -> listener.accept(recoveredChannel));
                 return;
             } catch (Exception exception) {
                 last = exception;

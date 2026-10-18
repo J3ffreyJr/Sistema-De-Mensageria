@@ -42,7 +42,7 @@ class RabbitPublisherTest {
     }
 
     @Test
-    void returnsReturnedWhenMandatoryPublishIsReturnedEvenIfConfirmed() {
+    void returnsReturnedWhenMandatoryPublishIsReturnedEvenIfConfirmed() throws Exception {
         AtomicReference<com.rabbitmq.client.ReturnListener> listener = new AtomicReference<>();
         Channel channel = (Channel) java.lang.reflect.Proxy.newProxyInstance(
                 Channel.class.getClassLoader(), new Class<?>[]{Channel.class}, (proxy, method, args) -> {
@@ -53,6 +53,42 @@ class RabbitPublisherTest {
                     if (method.getName().equals("basicPublish")) {
                         listener.get().handleReturn(312, "NO_ROUTE", (String) args[0], (String) args[1],
                                 (AMQP.BasicProperties) args[3], (byte[]) args[4]);
+                        return null;
+                    }
+                    if (method.getName().equals("waitForConfirms")) return true;
+                    if (method.getName().equals("isOpen")) return true;
+                    return method.getReturnType().isPrimitive() ? false : null;
+                });
+        RabbitPublisher publisher = new RabbitPublisher(channel, RabbitMQConfig.EXCHANGE_NAME, new MessageCodec());
+
+        PublishResult result = publisher.publish(message(RabbitMQConfig.ROUTING_KEY_1));
+
+        assertEquals(PublishResult.Status.RETURNED, result.status());
+        assertEquals("NO_ROUTE", result.reason());
+    }
+
+    @Test
+    void waitsForReturnThatArrivesAfterConfirmation() throws Exception {
+        AtomicReference<com.rabbitmq.client.ReturnListener> listener = new AtomicReference<>();
+        Channel channel = (Channel) java.lang.reflect.Proxy.newProxyInstance(
+                Channel.class.getClassLoader(), new Class<?>[]{Channel.class}, (proxy, method, args) -> {
+                    if (method.getName().equals("addReturnListener")) {
+                        listener.set((com.rabbitmq.client.ReturnListener) args[0]);
+                        return null;
+                    }
+                    if (method.getName().equals("basicPublish")) {
+                        Thread callback = new Thread(() -> {
+                            try {
+                                Thread.sleep(25);
+                                listener.get().handleReturn(312, "NO_ROUTE", (String) args[0],
+                                        (String) args[1], (AMQP.BasicProperties) args[3], (byte[]) args[4]);
+                            } catch (InterruptedException exception) {
+                                Thread.currentThread().interrupt();
+                            } catch (Exception ignored) {
+                                // The proxy callback is only used to model broker timing.
+                            }
+                        });
+                        callback.start();
                         return null;
                     }
                     if (method.getName().equals("waitForConfirms")) return true;

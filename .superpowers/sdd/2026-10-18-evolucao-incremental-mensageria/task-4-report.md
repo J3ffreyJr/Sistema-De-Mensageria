@@ -34,3 +34,30 @@ The integration test covers bound routing for destinations 1, 2, and 3 and delib
 
 - Integration tests require a running RabbitMQ broker and valid environment credentials.
 - `mvn` initially used an older JDK; final validation explicitly used installed JDK 25.
+
+## Fix report — Task 4 review findings
+
+- Migrated `Consumidor1` and `Consumidor2` to `MessageCodec.decode`, so both consumers now read
+  `messageId`, `content`, and `routingKey` from the versioned message contract. Manual ack, retry,
+  and idempotency remain deferred to Task 5.
+- Coordinated publisher confirms and asynchronous `basic.return` callbacks with a per-publication
+  pending record. A returned message is classified as `RETURNED` even when its confirm callback
+  wins the race. Added a delayed-return behavioral unit test.
+- Registered publishers with `RabbitConnectionManager` recovery callbacks. Recovery now supplies a
+  fresh channel, reinstalls the return listener, and safely replaces the closed publishing channel.
+- Added the missing single-argument `PublishException` constructor used for closed-channel failures.
+
+Focused validation (JDK 25):
+
+- `mvn -q "-Dtest=messaging.RabbitPublisherTest,messaging.MessageCodecTest,messaging.RabbitConnectionManagerTest" test`
+- Passed: 25 tests, 0 failures, 0 errors.
+
+Full validation (JDK 25):
+
+- `mvn -q clean test`
+- Passed: build successful; all tests passed (RabbitMQ integration tests remain opt-in/skipped
+  without a broker).
+
+Remaining concern: the publisher uses a bounded 250 ms return-settle window because RabbitMQ
+returns are asynchronous relative to confirmation; this prevents the observed callback race while
+keeping publishing bounded.

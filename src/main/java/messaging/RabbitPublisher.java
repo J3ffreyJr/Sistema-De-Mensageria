@@ -6,14 +6,19 @@ import config.RabbitMQConfig;
 import config.RabbitMQProperties;
 
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 public final class RabbitPublisher implements AutoCloseable {
     private final RabbitConnectionManager connectionManager;
-    private final Channel channel;
+    private volatile Channel channel;
     private final String exchange;
     private final MessageCodec codec;
-    private final AtomicReference<String> returnedReason = new AtomicReference<>();
+    private volatile PendingPublish pendingPublish;
     private final boolean ownsManager;
+    private final Object publishLock = new Object();
+    private final java.util.function.Consumer<Channel> recoveryListener;
+    private static final long RETURN_SETTLE_MILLIS = 250;
 
     public RabbitPublisher(RabbitMQProperties properties) {
         this(new RabbitConnectionManager(properties), RabbitMQConfig.EXCHANGE_NAME, new MessageCodec(), true);
@@ -29,6 +34,7 @@ public final class RabbitPublisher implements AutoCloseable {
         this.exchange = exchange;
         this.codec = codec;
         this.ownsManager = false;
+        this.recoveryListener = null;
         installReturnListener();
     }
 
@@ -40,35 +46,71 @@ public final class RabbitPublisher implements AutoCloseable {
         this.exchange = exchange;
         this.codec = codec;
         this.ownsManager = ownsManager;
+        this.recoveryListener = recovered -> {
+            synchronized (publishLock) {
+                Channel previous = this.channel;
+                this.channel = recovered;
+                installReturnListener();
+                if (previous != null && previous.isOpen()) {
+                    try {
+                        previous.close();
+                    } catch (Exception ignored) {
+                        // The manager already closed the old channel during recovery.
+                    }
+                }
+            }
+        };
         installReturnListener();
+        manager.addRecoveryListener(recoveryListener);
     }
 
     public PublishResult publish(Message message) {
         codec.validate(message);
-        returnedReason.set(null);
-        AMQP.BasicProperties properties = new AMQP.BasicProperties.Builder()
-                .deliveryMode(2)
-                .contentType("application/json")
-                .contentEncoding("UTF-8")
-                .messageId(message.messageId())
-                .build();
-        try {
-            channel.basicPublish(exchange, message.routingKey(), true, properties, codec.encode(message));
-            boolean confirmed = channel.waitForConfirms();
-            String returned = returnedReason.get();
-            if (returned != null) {
-                return PublishResult.returned(returned);
+        synchronized (publishLock) {
+            AMQP.BasicProperties properties = new AMQP.BasicProperties.Builder()
+                    .deliveryMode(2)
+                    .contentType("application/json")
+                    .contentEncoding("UTF-8")
+                    .messageId(message.messageId())
+                    .build();
+            PendingPublish pending = new PendingPublish(message.messageId());
+            pendingPublish = pending;
+            try {
+                Channel activeChannel = channel;
+                if (activeChannel == null || !activeChannel.isOpen()) {
+                    throw new PublishException("Publishing channel is not open");
+                }
+                activeChannel.basicPublish(exchange, message.routingKey(), true, properties, codec.encode(message));
+                boolean confirmed = activeChannel.waitForConfirms();
+                // A return is delivered on the connection callback executor and
+                // can race with waitForConfirms. Keep the pending publication
+                // alive until that callback has had a bounded chance to arrive.
+                pending.returnArrived.await(RETURN_SETTLE_MILLIS, TimeUnit.MILLISECONDS);
+                String returned = pending.returnReason.get();
+                if (returned != null) {
+                    return PublishResult.returned(returned);
+                }
+                return confirmed ? PublishResult.confirmed() : PublishResult.failed("Broker did not confirm publish");
+            } catch (PublishException exception) {
+                throw exception;
+            } catch (Exception exception) {
+                throw new PublishException("Unable to publish message " + message.messageId(), exception);
+            } finally {
+                pendingPublish = null;
             }
-            return confirmed ? PublishResult.confirmed() : PublishResult.failed("Broker did not confirm publish");
-        } catch (Exception exception) {
-            throw new PublishException("Unable to publish message " + message.messageId(), exception);
         }
     }
 
     private void installReturnListener() {
         try {
-            channel.addReturnListener((replyCode, replyText, exchange, routingKey, properties, body) ->
-                    returnedReason.compareAndSet(null, replyText));
+            channel.addReturnListener((replyCode, replyText, exchange, routingKey, properties, body) -> {
+                PendingPublish pending = pendingPublish;
+                if (pending != null && properties != null
+                        && pending.messageId.equals(properties.getMessageId())) {
+                    pending.returnReason.compareAndSet(null, replyText);
+                    pending.returnArrived.countDown();
+                }
+            });
         } catch (RuntimeException exception) {
             throw new PublishException("Unable to install returned-message listener", exception);
         }
@@ -77,6 +119,9 @@ public final class RabbitPublisher implements AutoCloseable {
     @Override
     public void close() {
         try {
+            if (connectionManager != null && recoveryListener != null) {
+                connectionManager.removeRecoveryListener(recoveryListener);
+            }
             if (connectionManager != null && ownsManager) {
                 connectionManager.close();
             } else if (channel.isOpen()) {
@@ -84,6 +129,16 @@ public final class RabbitPublisher implements AutoCloseable {
             }
         } catch (Exception exception) {
             throw new PublishException("Unable to close publisher", exception);
+        }
+    }
+
+    private static final class PendingPublish {
+        private final String messageId;
+        private final AtomicReference<String> returnReason = new AtomicReference<>();
+        private final CountDownLatch returnArrived = new CountDownLatch(1);
+
+        private PendingPublish(String messageId) {
+            this.messageId = messageId;
         }
     }
 }

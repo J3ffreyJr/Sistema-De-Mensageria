@@ -1,15 +1,14 @@
 package consumer;
 
 import com.rabbitmq.client.*;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import config.RabbitMQConfig;
+import messaging.Message;
+import messaging.MessageCodec;
 import utility.Registo;
-
-import java.util.Map;
 
 public class Consumidor2 {
     
-    private static final ObjectMapper objectMapper = new ObjectMapper();
+    private static final MessageCodec messageCodec = new MessageCodec();
     private static int totalMensagensProcessadas = 0;
     
     public static void main(String[] args) {
@@ -31,8 +30,7 @@ public class Consumidor2 {
             System.out.println("\n🔵 CONSUMIDOR 2 ATIVO - Pressione Ctrl+C para parar\n");
             
             DeliverCallback deliverCallback = (consumerTag, delivery) -> {
-                String mensagemJson = new String(delivery.getBody(), "UTF-8");
-                processarMensagem(mensagemJson, "Consumidor2");
+                processarMensagem(delivery.getBody(), "Consumidor2");
             };
             
             channel.basicConsume(RabbitMQConfig.QUEUE_CONSUMIDOR2, true, deliverCallback, consumerTag -> {});
@@ -46,17 +44,17 @@ public class Consumidor2 {
         }
     }
     
-    private static void processarMensagem(String mensagemJson, String nomeConsumidor) {
+    private static void processarMensagem(byte[] payload, String nomeConsumidor) {
         String messageId = "DESCONHECIDO";
         String conteudo = "N/A";
         String status = "SUCESSO";
         
         try {
        
-            Map<String, Object> mensagem = objectMapper.readValue(mensagemJson, Map.class);
-            messageId = (String) mensagem.get("id");
-            conteudo = (String) mensagem.get("conteudo");
-            String routingKey = (String) mensagem.get("routingKey");
+            Message mensagem = messageCodec.decode(payload);
+            messageId = mensagem.messageId();
+            conteudo = mensagem.content();
+            String routingKey = mensagem.routingKey();
  
             Thread.sleep(500 + (long)(Math.random() * 500));
             
@@ -76,7 +74,7 @@ public class Consumidor2 {
         } catch (Exception e) {
             status = "ERRO";
             Registo.logErro(messageId, "Processamento Consumidor2", e.getMessage());
-            Registo.logRecebimento(messageId, "ERRO: " + mensagemJson, status);
+            Registo.logRecebimento(messageId, "ERRO: payload inválido", status);
         }
     }
 }
