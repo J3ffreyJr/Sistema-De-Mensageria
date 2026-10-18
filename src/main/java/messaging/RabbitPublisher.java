@@ -18,7 +18,6 @@ public final class RabbitPublisher implements AutoCloseable {
     private final boolean ownsManager;
     private final Object publishLock = new Object();
     private final java.util.function.Consumer<Channel> recoveryListener;
-    private final com.rabbitmq.client.ShutdownListener shutdownListener;
 
     public RabbitPublisher(RabbitMQProperties properties) {
         this(new RabbitConnectionManager(properties), RabbitMQConfig.EXCHANGE_NAME, new MessageCodec(), true);
@@ -35,10 +34,9 @@ public final class RabbitPublisher implements AutoCloseable {
         this.codec = codec;
         this.ownsManager = false;
         this.recoveryListener = null;
-        this.shutdownListener = cause -> failPendingPublish(cause);
         confirmChannel();
         installReturnListener();
-        installShutdownListener();
+        installShutdownListener(channel);
     }
 
     private RabbitPublisher(RabbitConnectionManager manager, String exchange, MessageCodec codec,
@@ -46,7 +44,6 @@ public final class RabbitPublisher implements AutoCloseable {
         manager.open();
         this.connectionManager = manager;
         this.channel = manager.createChannel();
-        this.shutdownListener = cause -> failPendingPublish(cause);
         confirmChannel();
         this.exchange = exchange;
         this.codec = codec;
@@ -57,7 +54,7 @@ public final class RabbitPublisher implements AutoCloseable {
                 this.channel = recovered;
                 confirmChannel();
                 installReturnListener();
-                installShutdownListener();
+                installShutdownListener(recovered);
                 if (previous != null && previous.isOpen()) {
                     try {
                         previous.close();
@@ -68,7 +65,7 @@ public final class RabbitPublisher implements AutoCloseable {
             }
         };
         installReturnListener();
-        installShutdownListener();
+        installShutdownListener(channel);
         manager.addRecoveryListener(recoveryListener);
     }
 
@@ -106,6 +103,7 @@ public final class RabbitPublisher implements AutoCloseable {
                 if (activeChannel == null || !activeChannel.isOpen()) {
                     throw new PublishException("Publishing channel is not open");
                 }
+                pending.channel = activeChannel;
                 pending.deliveryTag = activeChannel.getNextPublishSeqNo();
                 activeChannel.addConfirmListener(confirmListener);
                 activeChannel.basicPublish(exchange, message.routingKey(), true, properties, codec.encode(message));
@@ -161,17 +159,19 @@ public final class RabbitPublisher implements AutoCloseable {
         }
     }
 
-    private void installShutdownListener() {
+    private void installShutdownListener(Channel publisherChannel) {
         try {
-            channel.addShutdownListener(shutdownListener);
+            publisherChannel.addShutdownListener(
+                    cause -> failPendingPublish(publisherChannel, cause));
         } catch (RuntimeException exception) {
             throw new PublishException("Unable to install publisher shutdown listener", exception);
         }
     }
 
-    private void failPendingPublish(ShutdownSignalException cause) {
+    private void failPendingPublish(Channel failingChannel, ShutdownSignalException cause) {
         PendingPublish pending = pendingPublish;
-        if (pending != null && pending.completed.compareAndSet(false, true)) {
+        if (pending != null && pending.channel == failingChannel
+                && pending.completed.compareAndSet(false, true)) {
             pending.failure.compareAndSet(null,
                     new PublishException("Publishing channel shut down before confirmation", cause));
             pending.confirmationArrived.countDown();
@@ -201,6 +201,7 @@ public final class RabbitPublisher implements AutoCloseable {
         private final AtomicReference<PublishException> failure = new AtomicReference<>();
         private final java.util.concurrent.atomic.AtomicBoolean completed = new java.util.concurrent.atomic.AtomicBoolean();
         private final CountDownLatch confirmationArrived = new CountDownLatch(1);
+        private Channel channel;
         private long deliveryTag;
 
         private PendingPublish(String messageId) {

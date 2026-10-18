@@ -9,8 +9,10 @@ import java.time.Instant;
 import java.lang.reflect.Field;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class RabbitPublisherIntegrationTest {
@@ -84,6 +86,20 @@ class RabbitPublisherIntegrationTest {
                                 RabbitMQConfig.ROUTING_KEY_1)).status());
                 assertEquals(PublishResult.Status.CONFIRMED,
                         second.publish(message("recovered-2-" + System.nanoTime(),
+                                RabbitMQConfig.ROUTING_KEY_2)).status());
+
+                assertEquals(PublishResult.Status.RETURNED,
+                        first.publish(message("returned-1-" + System.nanoTime(),
+                                "recovered-unbound-1")).status());
+                assertEquals(PublishResult.Status.RETURNED,
+                        second.publish(message("returned-2-" + System.nanoTime(),
+                                "recovered-unbound-2")).status());
+
+                first.close();
+                assertFalse(recoveredFirst.isOpen());
+                assertTrue(recoveredSecond.isOpen());
+                assertEquals(PublishResult.Status.CONFIRMED,
+                        second.publish(message("surviving-2-" + System.nanoTime(),
                                 RabbitMQConfig.ROUTING_KEY_2)).status());
             }
     }

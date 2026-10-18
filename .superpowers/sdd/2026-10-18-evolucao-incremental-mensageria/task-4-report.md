@@ -94,3 +94,37 @@ Build successful; 38 tests run, 35 passed, 0 failures/errors, 3 skipped
 
 The focused and full Maven commands both passed with
 `JAVA_HOME=C:\Program Files\Eclipse Adoptium\jdk-25.0.4.101-hotspot`.
+
+## Fix report — channel-scoped shutdown handling and recovery isolation (2026-10-18)
+
+- Associated every pending publication with the exact channel used for its
+  publish and made each channel's shutdown listener capture that channel.
+  A delayed shutdown callback from an old recovered channel can therefore no
+  longer fail a publication running on the replacement channel.
+- Extended
+  `recoversTwoPublishersWithIndependentConfirmedChannels()` to use both
+  recovered publishers for mandatory-return assertions, close one publisher
+  explicitly, verify its channel shutdown does not close the other recovered
+  channel, and publish successfully through the surviving publisher.
+- No fixed return-settle timeout or Task 5 behavior was added. Confirm
+  sequencing, mandatory returns, persistent JSON, and UTF-8 semantics remain
+  unchanged.
+
+Focused validation (JDK 25):
+
+```text
+mvn -q "-Dtest=messaging.RabbitPublisherTest,messaging.RabbitPublisherIntegrationTest,messaging.RabbitConnectionManagerTest" test
+
+Process exited with code 0.
+```
+
+Full validation (JDK 25):
+
+```text
+mvn -q clean test
+
+Process exited with code 0.
+```
+
+The opt-in RabbitMQ integration tests remain skipped unless
+`-Drabbitmq.integration=true` is supplied with a running broker.
