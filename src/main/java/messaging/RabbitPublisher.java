@@ -5,6 +5,7 @@ import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.ShutdownSignalException;
 import config.RabbitMQConfig;
 import config.RabbitMQProperties;
+import utility.MessageLog;
 
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.CountDownLatch;
@@ -71,6 +72,7 @@ public final class RabbitPublisher implements AutoCloseable {
 
     public PublishResult publish(Message message) {
         codec.validate(message);
+        MessageLog.publish(message.messageId(), null, message.routingKey());
         synchronized (publishLock) {
             AMQP.BasicProperties properties = new AMQP.BasicProperties.Builder()
                     .deliveryMode(2)
@@ -116,9 +118,15 @@ public final class RabbitPublisher implements AutoCloseable {
                 if (returned != null) {
                     return PublishResult.returned(returned);
                 }
-                return pending.confirmed.get()
+                PublishResult result = pending.confirmed.get()
                         ? PublishResult.confirmed()
                         : PublishResult.failed("Broker did not confirm publish");
+                if (result.status() == PublishResult.Status.CONFIRMED) {
+                    MessageLog.publishConfirmed(message.messageId(), null);
+                } else {
+                    MessageLog.publishError(message.messageId(), "publish", result.reason());
+                }
+                return result;
             } catch (PublishException exception) {
                 throw exception;
             } catch (Exception exception) {

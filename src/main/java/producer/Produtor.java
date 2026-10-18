@@ -5,7 +5,7 @@ import messaging.Message;
 import messaging.PublishResult;
 import messaging.RabbitPublisher;
 import config.RabbitMQConfig;
-import utility.Registo;
+import utility.MessageLog;
 
 import java.time.Instant;
 import java.util.Scanner;
@@ -14,13 +14,16 @@ import java.util.UUID;
 public class Produtor {
     
     public static void main(String[] args) {
-        Registo.iniciarNovoLog();
-        Registo.logInfo("=== SISTEMA PRODUTOR COM ROTEAMENTO INICIADO ===");
+        MessageLog.info("producer_started");
         
-        try (RabbitPublisher publisher = new RabbitPublisher(RabbitMQProperties.fromEnvironment(System.getenv()))) {
-            Registo.logInfo("Conectado ao RabbitMQ com sucesso");
-            Registo.logInfo("Exchange: " + RabbitMQConfig.EXCHANGE_NAME);
-            Registo.logInfo("Filas: " + RabbitMQConfig.QUEUE_CONSUMIDOR1 + ", " + RabbitMQConfig.QUEUE_CONSUMIDOR2);
+        RabbitPublisher publisher = new RabbitPublisher(RabbitMQProperties.fromEnvironment(System.getenv()));
+        Thread shutdownHook = new Thread(() -> {
+            MessageLog.shutdown("producer");
+            publisher.close();
+        }, "producer-shutdown");
+        Runtime.getRuntime().addShutdownHook(shutdownHook);
+        try {
+            MessageLog.connection("connected", "producer");
             
             System.out.println("\n=== OPÇÕES DE DESTINO ===");
             System.out.println("1 - Apenas Consumidor 1");
@@ -50,10 +53,11 @@ public class Produtor {
             }
             
             scanner.close();
-            Registo.logInfo("Produtor encerrado. Total de mensagens enviadas: " + (contador - 1));
-            
+            MessageLog.shutdown("producer");
         } catch (Exception e) {
-            Registo.logErro("N/A", "Conexão Produtor", e.getMessage());
+            MessageLog.publishError("N/A", "producer", e.getMessage());
+        } finally {
+            publisher.close();
         }
     }
     
@@ -91,7 +95,7 @@ public class Produtor {
             enviarMensagem(publisher, conteudo, numeroMensagem, routingKey, destinatarios);
             
         } catch (Exception e) {
-            Registo.logErro("N/A", "Processamento Input", e.getMessage());
+            MessageLog.publishError("N/A", "input", e.getMessage());
         }
     }
     
@@ -106,11 +110,11 @@ public class Produtor {
                 throw new IllegalStateException("Mensagem não confirmada: " + result.reason());
             }
         
-            String logConteudo = String.format("Conteúdo: \"%s\" | Destino: %s", conteudo, destinatarios);
-            Registo.logEnvio(messageId, logConteudo);
+            MessageLog.publish(messageId, null, routingKey);
+            MessageLog.publishConfirmed(messageId, null);
             
         } catch (Exception e) {
-            Registo.logErro(messageId, "Envio Mensagem", e.getMessage());
+            MessageLog.publishError(messageId, "publish", e.getMessage());
             throw e;
         }
     }

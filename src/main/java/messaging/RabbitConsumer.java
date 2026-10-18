@@ -5,6 +5,7 @@ import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.DeliverCallback;
 import com.rabbitmq.client.Delivery;
 import config.RabbitMQConfig;
+import utility.MessageLog;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -109,13 +110,19 @@ public final class RabbitConsumer implements AutoCloseable {
             // MessageCodec also validates the versioned contract.
             message = codec.decode(decodeUtf8(delivery.getBody()));
         } catch (RuntimeException | CharacterCodingException invalid) {
+            MessageLog.deadLetter(delivery.getProperties().getMessageId(), delivery.getProperties().getCorrelationId(),
+                    "invalid-message");
             deadLetter(active, delivery, tag);
             return;
         }
         try {
+            MessageLog.receive(message.messageId(), delivery.getProperties().getCorrelationId(), queue);
             processor.process(message);
             active.basicAck(tag, false);
+            MessageLog.ack(message.messageId(), delivery.getProperties().getCorrelationId());
         } catch (RuntimeException transientFailure) {
+            MessageLog.retry(message.messageId(), delivery.getProperties().getCorrelationId(),
+                    retryCount(delivery.getProperties()) + 1, transientFailure.getClass().getSimpleName());
             retryOrDeadLetter(active, delivery, tag);
         } catch (IOException channelFailure) {
             // A closed channel leaves the delivery unacked and RabbitMQ redelivers it.
@@ -125,6 +132,8 @@ public final class RabbitConsumer implements AutoCloseable {
     private void retryOrDeadLetter(Channel active, Delivery delivery, long tag) {
         int retryCount = retryCount(delivery.getProperties());
         if (retryCount >= maxRetries) {
+            MessageLog.deadLetter(delivery.getProperties().getMessageId(), delivery.getProperties().getCorrelationId(),
+                    "max-retries");
             deadLetter(active, delivery, tag);
             return;
         }
@@ -142,8 +151,14 @@ public final class RabbitConsumer implements AutoCloseable {
             active.basicPublish(RabbitTopology.RETRY_EXCHANGE, retryKey, properties, delivery.getBody());
             awaitConfirmation(active);
             active.basicAck(tag, false);
+            MessageLog.retry(delivery.getProperties().getMessageId(), delivery.getProperties().getCorrelationId(),
+                    retryCount + 1, "processor-failure");
         } catch (IOException | RuntimeException publishFailure) {
-            try { active.basicNack(tag, false, true); } catch (IOException ignored) { }
+            try {
+                active.basicNack(tag, false, true);
+                MessageLog.nack(delivery.getProperties().getMessageId(),
+                        delivery.getProperties().getCorrelationId(), true);
+            } catch (IOException ignored) { }
         }
     }
 
@@ -155,8 +170,14 @@ public final class RabbitConsumer implements AutoCloseable {
                     delivery.getProperties(), delivery.getBody());
             awaitConfirmation(active);
             active.basicAck(tag, false);
+            MessageLog.deadLetter(delivery.getProperties().getMessageId(), delivery.getProperties().getCorrelationId(),
+                    "dead-lettered");
         } catch (IOException | RuntimeException failure) {
-            try { active.basicNack(tag, false, true); } catch (IOException ignored) { }
+            try {
+                active.basicNack(tag, false, true);
+                MessageLog.nack(delivery.getProperties().getMessageId(),
+                        delivery.getProperties().getCorrelationId(), true);
+            } catch (IOException ignored) { }
         }
     }
 

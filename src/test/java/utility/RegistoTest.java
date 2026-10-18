@@ -1,7 +1,5 @@
 package utility;
 
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
@@ -10,59 +8,30 @@ import java.nio.file.Path;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RegistoTest {
+    private static final Path LOG_FILE = Path.of("logs", "mensageria.log");
 
-    private static final Path LOG_FILE = Path.of("logs_mensageria.txt");
-    private byte[] originalLog;
+    @Test
+    void structuredEventsPreserveIdsAndDoNotWritePayloads() throws Exception {
+        MessageLog.publish("msg-1", "corr-1", "messages.1");
+        MessageLog.receive("msg-1", "corr-1", "consumer-1");
+        MessageLog.publishError("msg-1", "publish", "connection failed");
 
-    @BeforeEach
-    void preserveExistingLogFile() throws Exception {
-        originalLog = Files.exists(LOG_FILE) ? Files.readAllBytes(LOG_FILE) : null;
-        Files.deleteIfExists(LOG_FILE);
-    }
-
-    @AfterEach
-    void restoreExistingLogFile() throws Exception {
-        if (originalLog == null) {
-            Files.deleteIfExists(LOG_FILE);
-        } else {
-            Files.write(LOG_FILE, originalLog);
-        }
+        String content = Files.readString(LOG_FILE);
+        assertTrue(content.contains("event=publish"));
+        assertTrue(content.contains("messageId=msg-1"));
+        assertTrue(content.contains("correlationId=corr-1"));
+        assertTrue(content.contains("level=ERROR"));
     }
 
     @Test
-    void iniciaNovoLogEscreveCabecalho() throws Exception {
+    void compatibilityFacadeDoesNotTruncateExistingLog() throws Exception {
+        Files.createDirectories(LOG_FILE.getParent());
+        Files.writeString(LOG_FILE, "existing-entry\n");
+
         Registo.iniciarNovoLog();
 
         String content = Files.readString(LOG_FILE);
-
-        assertTrue(content.startsWith("=== SISTEMA DE MENSAGERIA - REGISTO DE MENSAGENS ==="));
-        assertTrue(content.contains("Iniciado em: "));
-        assertTrue(content.contains("============================================================"));
-    }
-
-    @Test
-    void registaEnvioRecebimentoEInformacao() throws Exception {
-        Registo.logEnvio("msg-1", "hello");
-        Registo.logRecebimento("msg-1", "hello", "SUCESSO");
-        Registo.logInfo("ready");
-
-        String content = Files.readString(LOG_FILE);
-
-        assertTrue(content.contains("ENVIO     | "));
-        assertTrue(content.contains("ID: msg-1 | Conteúdo: \"hello\""));
-        assertTrue(content.contains("RECEBIDO  | "));
-        assertTrue(content.contains("Status: SUCESSO"));
-        assertTrue(content.contains("INFO      | "));
-        assertTrue(content.contains("ready"));
-    }
-
-    @Test
-    void registaErroComOperacaoEMensagem() throws Exception {
-        Registo.logErro("msg-2", "publish", "connection failed");
-
-        String content = Files.readString(LOG_FILE);
-
-        assertTrue(content.contains("ERRO      | "));
-        assertTrue(content.contains("Operação: publish | ID: msg-2 | Erro: connection failed"));
+        assertTrue(content.startsWith("existing-entry\n"));
+        assertTrue(content.contains("event=connection"));
     }
 }
