@@ -1,6 +1,9 @@
 target/
 logs_mensageria.txt
 *.log
+.env
+.env.*
+!.env.example
 .idea/
 *.iml
 .vscode/
