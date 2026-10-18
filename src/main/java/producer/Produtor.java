@@ -1,48 +1,23 @@
 package producer;
 
-import com.rabbitmq.client.Channel;
-import com.rabbitmq.client.Connection;
-import com.rabbitmq.client.ConnectionFactory;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import config.RabbitMQProperties;
+import messaging.Message;
+import messaging.PublishResult;
+import messaging.RabbitPublisher;
 import config.RabbitMQConfig;
 import utility.Registo;
 
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
-import java.util.HashMap;
-import java.util.Map;
+import java.time.Instant;
 import java.util.Scanner;
 import java.util.UUID;
 
 public class Produtor {
     
-    private static final ObjectMapper objectMapper = new ObjectMapper();
-    private static final DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss");
-    
     public static void main(String[] args) {
         Registo.iniciarNovoLog();
         Registo.logInfo("=== SISTEMA PRODUTOR COM ROTEAMENTO INICIADO ===");
         
-        Connection connection = null;
-        Channel channel = null;
-        
-        try {
-            
-            ConnectionFactory factory = RabbitMQConfig.getConnectionFactory();
-            connection = factory.newConnection();
-            channel = connection.createChannel();
-
-            channel.exchangeDeclare(RabbitMQConfig.EXCHANGE_NAME, "direct", true);
-
-            channel.queueDeclare(RabbitMQConfig.QUEUE_CONSUMIDOR1, true, false, false, null);
-            channel.queueDeclare(RabbitMQConfig.QUEUE_CONSUMIDOR2, true, false, false, null);
-
-            channel.queueBind(RabbitMQConfig.QUEUE_CONSUMIDOR1, RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.ROUTING_KEY_1);
-            channel.queueBind(RabbitMQConfig.QUEUE_CONSUMIDOR2, RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.ROUTING_KEY_2);
-          
-            channel.queueBind(RabbitMQConfig.QUEUE_CONSUMIDOR1, RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.ROUTING_KEY_ALL);
-            channel.queueBind(RabbitMQConfig.QUEUE_CONSUMIDOR2, RabbitMQConfig.EXCHANGE_NAME, RabbitMQConfig.ROUTING_KEY_ALL);
-            
+        try (RabbitPublisher publisher = new RabbitPublisher(RabbitMQProperties.fromEnvironment(System.getenv()))) {
             Registo.logInfo("Conectado ao RabbitMQ com sucesso");
             Registo.logInfo("Exchange: " + RabbitMQConfig.EXCHANGE_NAME);
             Registo.logInfo("Filas: " + RabbitMQConfig.QUEUE_CONSUMIDOR1 + ", " + RabbitMQConfig.QUEUE_CONSUMIDOR2);
@@ -67,7 +42,7 @@ public class Produtor {
                 }
                 
                 if (!input.trim().isEmpty()) {
-                    processarInput(channel, input, contador);
+                    processarInput(publisher, input, contador);
                     contador++;
                 } else {
                     System.out.println("Entrada vazia, tente novamente.");
@@ -79,21 +54,10 @@ public class Produtor {
             
         } catch (Exception e) {
             Registo.logErro("N/A", "Conexão Produtor", e.getMessage());
-        } finally {
-            try {
-                if (channel != null && channel.isOpen()) {
-                    channel.close();
-                }
-                if (connection != null && connection.isOpen()) {
-                    connection.close();
-                }
-            } catch (Exception e) {
-                Registo.logErro("N/A", "Fechamento Conexão", e.getMessage());
-            }
         }
     }
     
-    private static void processarInput(Channel channel, String input, int numeroMensagem) {
+    private static void processarInput(RabbitPublisher publisher, String input, int numeroMensagem) {
         try {
             String[] partes = input.split(" ", 2);
             if (partes.length < 2) {
@@ -124,31 +88,23 @@ public class Produtor {
                     return;
             }
             
-            enviarMensagem(channel, conteudo, numeroMensagem, routingKey, destinatarios);
+            enviarMensagem(publisher, conteudo, numeroMensagem, routingKey, destinatarios);
             
         } catch (Exception e) {
             Registo.logErro("N/A", "Processamento Input", e.getMessage());
         }
     }
     
-    private static void enviarMensagem(Channel channel, String conteudo, int numeroMensagem, 
+    private static void enviarMensagem(RabbitPublisher publisher, String conteudo, int numeroMensagem, 
                                      String routingKey, String destinatarios) throws Exception {
         String messageId = "PROD-" + System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 8);
         
         try {
-           
-            Map<String, Object> mensagemObj = new HashMap<>();
-            mensagemObj.put("id", messageId);
-            mensagemObj.put("conteudo", conteudo);
-            mensagemObj.put("timestamp", LocalDateTime.now().format(formatter));
-            mensagemObj.put("produtor", "ProdutorJava");
-            mensagemObj.put("numero", numeroMensagem);
-            mensagemObj.put("routingKey", routingKey);
-            mensagemObj.put("destinatarios", destinatarios);
-            
-            String mensagemJson = objectMapper.writeValueAsString(mensagemObj);
-       
-            channel.basicPublish(RabbitMQConfig.EXCHANGE_NAME, routingKey, null, mensagemJson.getBytes());
+            Message message = new Message(1, messageId, conteudo, Instant.now(), "ProdutorJava", routingKey);
+            PublishResult result = publisher.publish(message);
+            if (result.status() != PublishResult.Status.CONFIRMED) {
+                throw new IllegalStateException("Mensagem não confirmada: " + result.reason());
+            }
         
             String logConteudo = String.format("Conteúdo: \"%s\" | Destino: %s", conteudo, destinatarios);
             Registo.logEnvio(messageId, logConteudo);
