@@ -74,3 +74,13 @@ declared by `RabbitTopology`.
 - **Validation:** focused consumer integration tests and the complete Maven
   suite both pass on JDK 25. Broker scenarios were skipped because integration
   mode was not enabled in the validation environment.
+
+## Review-fix report — retry observation
+
+- The bounded retry test now waits for and inspects the final dead-letter copy
+  instead of calling `basicGet` on the retry queue.
+- It verifies the preserved `x-retry-count` header and asserts that exactly one
+  dead-letter copy exists, so no retry message is consumed before its TTL can
+  route it through the exhausted retry queue.
+- The test still asserts an empty original queue, while retaining opt-in
+  execution, isolated IDs, and topology cleanup.

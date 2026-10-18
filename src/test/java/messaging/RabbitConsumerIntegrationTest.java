@@ -80,9 +80,13 @@ class RabbitConsumerIntegrationTest {
             consumer.start();
             publish(publisher, new Message(1, id(), "integration", Instant.now(), "retry",
                     RabbitMQConfig.ROUTING_KEY_1));
-            assertNotNull(awaitGet(publisher, RabbitTopology.RETRY_QUEUE_1, 5_000));
-            assertNotNull(awaitGet(publisher, DEAD_QUEUE, 15_000),
+            GetResponse deadLetter = awaitGet(publisher, DEAD_QUEUE, 15_000);
+            assertNotNull(deadLetter,
                     "message must reach DLX after the configured retry bound");
+            assertEquals(1, deadLetter.getProps().getHeaders().get(RabbitConsumer.RETRY_COUNT_HEADER),
+                    "dead-letter copy must preserve the bounded retry count");
+            assertNull(publisher.basicGet(DEAD_QUEUE, true),
+                    "bounded retry must produce only one dead-letter copy");
             assertNull(publisher.basicGet(QUEUE, true));
         }
     }
