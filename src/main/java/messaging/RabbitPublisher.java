@@ -7,7 +7,6 @@ import config.RabbitMQProperties;
 
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 
 public final class RabbitPublisher implements AutoCloseable {
     private final RabbitConnectionManager connectionManager;
@@ -18,7 +17,6 @@ public final class RabbitPublisher implements AutoCloseable {
     private final boolean ownsManager;
     private final Object publishLock = new Object();
     private final java.util.function.Consumer<Channel> recoveryListener;
-    private static final long RETURN_SETTLE_MILLIS = 250;
 
     public RabbitPublisher(RabbitMQProperties properties) {
         this(new RabbitConnectionManager(properties), RabbitMQConfig.EXCHANGE_NAME, new MessageCodec(), true);
@@ -35,6 +33,7 @@ public final class RabbitPublisher implements AutoCloseable {
         this.codec = codec;
         this.ownsManager = false;
         this.recoveryListener = null;
+        confirmChannel();
         installReturnListener();
     }
 
@@ -43,6 +42,7 @@ public final class RabbitPublisher implements AutoCloseable {
         manager.open();
         this.connectionManager = manager;
         this.channel = manager.createChannel();
+        confirmChannel();
         this.exchange = exchange;
         this.codec = codec;
         this.ownsManager = ownsManager;
@@ -50,6 +50,7 @@ public final class RabbitPublisher implements AutoCloseable {
             synchronized (publishLock) {
                 Channel previous = this.channel;
                 this.channel = recovered;
+                confirmChannel();
                 installReturnListener();
                 if (previous != null && previous.isOpen()) {
                     try {
@@ -75,29 +76,61 @@ public final class RabbitPublisher implements AutoCloseable {
                     .build();
             PendingPublish pending = new PendingPublish(message.messageId());
             pendingPublish = pending;
+            com.rabbitmq.client.ConfirmListener confirmListener = new com.rabbitmq.client.ConfirmListener() {
+                @Override
+                public void handleAck(long deliveryTag, boolean multiple) {
+                    if (pending.deliveryTag == deliveryTag || (multiple && pending.deliveryTag <= deliveryTag)) {
+                        pending.confirmed.set(true);
+                        pending.confirmationArrived.countDown();
+                    }
+                }
+
+                @Override
+                public void handleNack(long deliveryTag, boolean multiple) {
+                    if (pending.deliveryTag == deliveryTag || (multiple && pending.deliveryTag <= deliveryTag)) {
+                        pending.confirmationArrived.countDown();
+                    }
+                }
+            };
             try {
                 Channel activeChannel = channel;
                 if (activeChannel == null || !activeChannel.isOpen()) {
                     throw new PublishException("Publishing channel is not open");
                 }
+                pending.deliveryTag = activeChannel.getNextPublishSeqNo();
+                activeChannel.addConfirmListener(confirmListener);
                 activeChannel.basicPublish(exchange, message.routingKey(), true, properties, codec.encode(message));
-                boolean confirmed = activeChannel.waitForConfirms();
-                // A return is delivered on the connection callback executor and
-                // can race with waitForConfirms. Keep the pending publication
-                // alive until that callback has had a bounded chance to arrive.
-                pending.returnArrived.await(RETURN_SETTLE_MILLIS, TimeUnit.MILLISECONDS);
+                pending.confirmationArrived.await();
                 String returned = pending.returnReason.get();
                 if (returned != null) {
                     return PublishResult.returned(returned);
                 }
-                return confirmed ? PublishResult.confirmed() : PublishResult.failed("Broker did not confirm publish");
+                return pending.confirmed.get()
+                        ? PublishResult.confirmed()
+                        : PublishResult.failed("Broker did not confirm publish");
             } catch (PublishException exception) {
                 throw exception;
             } catch (Exception exception) {
                 throw new PublishException("Unable to publish message " + message.messageId(), exception);
             } finally {
+                try {
+                    Channel activeChannel = channel;
+                    if (activeChannel != null) {
+                        activeChannel.removeConfirmListener(confirmListener);
+                    }
+                } catch (RuntimeException ignored) {
+                    // The channel may have been closed while publishing.
+                }
                 pendingPublish = null;
             }
+        }
+    }
+
+    private void confirmChannel() {
+        try {
+            channel.confirmSelect();
+        } catch (Exception exception) {
+            throw new PublishException("Unable to enable publisher confirms", exception);
         }
     }
 
@@ -108,7 +141,6 @@ public final class RabbitPublisher implements AutoCloseable {
                 if (pending != null && properties != null
                         && pending.messageId.equals(properties.getMessageId())) {
                     pending.returnReason.compareAndSet(null, replyText);
-                    pending.returnArrived.countDown();
                 }
             });
         } catch (RuntimeException exception) {
@@ -135,7 +167,9 @@ public final class RabbitPublisher implements AutoCloseable {
     private static final class PendingPublish {
         private final String messageId;
         private final AtomicReference<String> returnReason = new AtomicReference<>();
-        private final CountDownLatch returnArrived = new CountDownLatch(1);
+        private final AtomicReference<Boolean> confirmed = new AtomicReference<>(false);
+        private final CountDownLatch confirmationArrived = new CountDownLatch(1);
+        private long deliveryTag;
 
         private PendingPublish(String messageId) {
             this.messageId = messageId;

@@ -119,8 +119,9 @@ public final class RabbitConnectionManager implements AutoCloseable {
             try {
                 closeQuietly();
                 installConnection(factory.newConnection());
-                Channel recoveredChannel = createChannel();
-                recoveryListeners.forEach(listener -> listener.accept(recoveredChannel));
+                // Each owner gets a private channel. Sharing one channel would
+                // let one publisher close or reconfigure another publisher's channel.
+                recoveryListeners.forEach(listener -> listener.accept(createChannel()));
                 return;
             } catch (Exception exception) {
                 last = exception;

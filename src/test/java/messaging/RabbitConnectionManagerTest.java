@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -76,6 +77,30 @@ class RabbitConnectionManagerTest {
         manager.close();
     }
 
+    @Test
+    void givesEachRecoveryListenerAnIndependentChannel() throws Exception {
+        RabbitConnectionManager manager = new RabbitConnectionManager(
+                new RabbitMQProperties("localhost", 5672, "/", "user", "password", false),
+                factoryReturning(new AtomicInteger(), new AtomicInteger()),
+                new RabbitTopology(), 2, Duration.ZERO);
+        AtomicReference<Channel> first = new AtomicReference<>();
+        AtomicReference<Channel> second = new AtomicReference<>();
+
+        manager.open();
+        manager.addRecoveryListener(first::set);
+        manager.addRecoveryListener(second::set);
+        manager.recoverNowForTest();
+
+        assertNotNull(first.get());
+        assertNotNull(second.get());
+        assertNotSame(first.get(), second.get());
+        first.get().close();
+        assertFalse(first.get().isOpen());
+        assertTrue(second.get().isOpen());
+        second.get().close();
+        manager.close();
+    }
+
     private static ConnectionFactory factoryReturning(AtomicInteger channelCloses, AtomicInteger connectionCloses) {
         ConnectionFactory factory = new ConnectionFactory() {
             @Override
@@ -102,6 +127,7 @@ class RabbitConnectionManagerTest {
     }
 
     private static Channel recordingChannel(AtomicInteger closes) {
+        AtomicBoolean open = new AtomicBoolean(true);
         return (Channel) Proxy.newProxyInstance(
                 Channel.class.getClassLoader(),
                 new Class<?>[]{Channel.class},
@@ -109,8 +135,11 @@ class RabbitConnectionManagerTest {
                     if (method.getName().equals("hashCode")) return System.identityHashCode(proxy);
                     if (method.getName().equals("equals")) return proxy == args[0];
                     if (method.getName().equals("toString")) return "channel";
-                    if (method.getName().equals("close")) closes.incrementAndGet();
-                    if (method.getName().equals("isOpen")) return true;
+                    if (method.getName().equals("close")) {
+                        if (open.compareAndSet(true, false)) closes.incrementAndGet();
+                        return null;
+                    }
+                    if (method.getName().equals("isOpen")) return open.get();
                     return method.getReturnType().isPrimitive() ? false : null;
                 });
     }

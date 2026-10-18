@@ -44,18 +44,26 @@ class RabbitPublisherTest {
     @Test
     void returnsReturnedWhenMandatoryPublishIsReturnedEvenIfConfirmed() throws Exception {
         AtomicReference<com.rabbitmq.client.ReturnListener> listener = new AtomicReference<>();
+        AtomicReference<com.rabbitmq.client.ConfirmListener> confirms = new AtomicReference<>();
         Channel channel = (Channel) java.lang.reflect.Proxy.newProxyInstance(
                 Channel.class.getClassLoader(), new Class<?>[]{Channel.class}, (proxy, method, args) -> {
                     if (method.getName().equals("addReturnListener")) {
                         listener.set((com.rabbitmq.client.ReturnListener) args[0]);
                         return null;
                     }
+                    if (method.getName().equals("confirmSelect")) return null;
+                    if (method.getName().equals("getNextPublishSeqNo")) return 1L;
+                    if (method.getName().equals("addConfirmListener")) {
+                        confirms.set((com.rabbitmq.client.ConfirmListener) args[0]);
+                        return null;
+                    }
+                    if (method.getName().equals("removeConfirmListener")) return null;
                     if (method.getName().equals("basicPublish")) {
                         listener.get().handleReturn(312, "NO_ROUTE", (String) args[0], (String) args[1],
                                 (AMQP.BasicProperties) args[3], (byte[]) args[4]);
+                        confirms.get().handleAck(1L, false);
                         return null;
                     }
-                    if (method.getName().equals("waitForConfirms")) return true;
                     if (method.getName().equals("isOpen")) return true;
                     return method.getReturnType().isPrimitive() ? false : null;
                 });
@@ -68,30 +76,30 @@ class RabbitPublisherTest {
     }
 
     @Test
-    void waitsForReturnThatArrivesAfterConfirmation() throws Exception {
+    void classifiesReturnedPublishUsingRabbitProtocolOrdering() throws Exception {
         AtomicReference<com.rabbitmq.client.ReturnListener> listener = new AtomicReference<>();
+        AtomicReference<com.rabbitmq.client.ConfirmListener> confirms = new AtomicReference<>();
         Channel channel = (Channel) java.lang.reflect.Proxy.newProxyInstance(
                 Channel.class.getClassLoader(), new Class<?>[]{Channel.class}, (proxy, method, args) -> {
                     if (method.getName().equals("addReturnListener")) {
                         listener.set((com.rabbitmq.client.ReturnListener) args[0]);
                         return null;
                     }
-                    if (method.getName().equals("basicPublish")) {
-                        Thread callback = new Thread(() -> {
-                            try {
-                                Thread.sleep(25);
-                                listener.get().handleReturn(312, "NO_ROUTE", (String) args[0],
-                                        (String) args[1], (AMQP.BasicProperties) args[3], (byte[]) args[4]);
-                            } catch (InterruptedException exception) {
-                                Thread.currentThread().interrupt();
-                            } catch (Exception ignored) {
-                                // The proxy callback is only used to model broker timing.
-                            }
-                        });
-                        callback.start();
+                    if (method.getName().equals("confirmSelect")) return null;
+                    if (method.getName().equals("getNextPublishSeqNo")) return 1L;
+                    if (method.getName().equals("addConfirmListener")) {
+                        confirms.set((com.rabbitmq.client.ConfirmListener) args[0]);
                         return null;
                     }
-                    if (method.getName().equals("waitForConfirms")) return true;
+                    if (method.getName().equals("removeConfirmListener")) return null;
+                    if (method.getName().equals("basicPublish")) {
+                        // RabbitMQ's protocol ordering contract is return before
+                        // confirm for a mandatory unroutable publication.
+                        listener.get().handleReturn(312, "NO_ROUTE", (String) args[0],
+                                (String) args[1], (AMQP.BasicProperties) args[3], (byte[]) args[4]);
+                        confirms.get().handleAck(1L, false);
+                        return null;
+                    }
                     if (method.getName().equals("isOpen")) return true;
                     return method.getReturnType().isPrimitive() ? false : null;
                 });
@@ -118,14 +126,22 @@ class RabbitPublisherTest {
     }
 
     private static Channel channelFor(PublishCall call) {
+        AtomicReference<com.rabbitmq.client.ConfirmListener> confirms = new AtomicReference<>();
         return (Channel) java.lang.reflect.Proxy.newProxyInstance(
                 Channel.class.getClassLoader(), new Class<?>[]{Channel.class}, (proxy, method, args) -> {
                     if (method.getName().equals("basicPublish")) {
                         call.publish((String) args[0], (String) args[1], (Boolean) args[2],
                                 (AMQP.BasicProperties) args[3], (byte[]) args[4]);
+                        confirms.get().handleAck(1L, false);
                         return null;
                     }
-                    if (method.getName().equals("waitForConfirms")) return true;
+                    if (method.getName().equals("confirmSelect")) return null;
+                    if (method.getName().equals("getNextPublishSeqNo")) return 1L;
+                    if (method.getName().equals("addConfirmListener")) {
+                        confirms.set((com.rabbitmq.client.ConfirmListener) args[0]);
+                        return null;
+                    }
+                    if (method.getName().equals("removeConfirmListener")) return null;
                     if (method.getName().equals("isOpen")) return true;
                     if (method.getName().equals("close")) return null;
                     if (method.getName().equals("addReturnListener")) {

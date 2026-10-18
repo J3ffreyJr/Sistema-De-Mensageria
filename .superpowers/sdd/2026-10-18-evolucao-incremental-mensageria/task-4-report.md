@@ -58,6 +58,39 @@ Full validation (JDK 25):
 - Passed: build successful; all tests passed (RabbitMQ integration tests remain opt-in/skipped
   without a broker).
 
-Remaining concern: the publisher uses a bounded 250 ms return-settle window because RabbitMQ
-returns are asynchronous relative to confirmation; this prevents the observed callback race while
-keeping publishing bounded.
+
+## Fix report — remaining Task 4 review findings (2026-10-18)
+
+- Removed the fixed 250 ms return-settle timeout. `RabbitPublisher` now enables confirms,
+  correlates each publication with its publish sequence number, and waits for that publication's
+  confirm callback. RabbitMQ's channel protocol ordering delivers `basic.return` before the
+  corresponding confirm for a mandatory unroutable publication, so a returned message cannot be
+  reported as `CONFIRMED`. The focused test models that ordering directly (return callback followed
+  by confirm callback), rather than sleeping for an arbitrary duration.
+- `RabbitConnectionManager.recover()` now creates a distinct recovered channel for every recovery
+  listener. Two publishers/listeners therefore cannot share a channel; the regression test closes
+  one recovered channel and verifies the other remains open.
+- Persistent delivery mode, JSON content type, UTF-8 encoding, mandatory publishing, and existing
+  public publisher/manager APIs are preserved. No Task 5 manual ack, retry, or idempotency work was
+  added.
+
+Focused command (JDK 25):
+
+```text
+mvn -q "-Dtest=RabbitPublisherTest,RabbitConnectionManagerTest" test
+
+Process exited with code 0.
+```
+
+Full command (JDK 25):
+
+```text
+mvn -q clean test
+
+Process exited with code 0.
+Build successful; 38 tests run, 35 passed, 0 failures/errors, 3 skipped
+(RabbitMQ integration tests are opt-in without a broker).
+```
+
+The focused and full Maven commands both passed with
+`JAVA_HOME=C:\Program Files\Eclipse Adoptium\jdk-25.0.4.101-hotspot`.
