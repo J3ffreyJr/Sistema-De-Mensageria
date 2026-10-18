@@ -28,6 +28,10 @@ public final class MessageLog {
         event("receive", messageId, correlationId, "consumer", consumer);
     }
 
+    public static void receiveStatus(String messageId, String status) {
+        event("receive", messageId, null, "status", status);
+    }
+
     public static void retry(String messageId, String correlationId, int attempt, String reason) {
         event("retry", messageId, correlationId, "attempt", Integer.toString(attempt), "reason", reason);
     }

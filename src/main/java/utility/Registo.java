@@ -9,7 +9,7 @@ public final class Registo {
     }
 
     public static void logRecebimento(String messageId, String ignoredContent, String status) {
-        MessageLog.receive(messageId, null, status);
+        MessageLog.receiveStatus(messageId, status);
     }
 
     public static void logErro(String messageId, String operacao, String erro) {

@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RegistoTest {
@@ -33,5 +34,15 @@ class RegistoTest {
         String content = Files.readString(LOG_FILE);
         assertTrue(content.startsWith("existing-entry\n"));
         assertTrue(content.contains("event=connection"));
+    }
+
+    @Test
+    void compatibilityReceiveLogsStatusInsteadOfConsumer() throws Exception {
+        Registo.logRecebimento("status-msg-1", "sensitive payload", "SUCESSO");
+
+        String content = Files.readString(LOG_FILE);
+        assertTrue(content.contains("event=receive messageId=status-msg-1 status=SUCESSO"));
+        assertFalse(content.contains("messageId=status-msg-1 consumer=SUCESSO"));
+        assertFalse(content.contains("sensitive payload"));
     }
 }

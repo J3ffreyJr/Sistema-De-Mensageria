@@ -31,3 +31,15 @@ A live RabbitMQ start/stop check was not executed because it requires an externa
 ## Commit
 
 `97494df Replace event logging and add controlled shutdown`
+
+## Review finding fix — legacy receipt status
+
+- Fixed `Registo.logRecebimento` so its legacy `status` argument is emitted as the structured `status` field through the dedicated `MessageLog.receiveStatus` compatibility event, rather than being mislabeled as `consumer`.
+- Preserved the message ID and payload omission/redaction behavior.
+- Added `RegistoTest.compatibilityReceiveLogsStatusInsteadOfConsumer`, asserting `SUCESSO` is logged as status, never as consumer, and the payload is absent.
+- Focused validation: `mvn -q -Dtest=RegistoTest test` on Eclipse Temurin JDK 25.0.4 — passed (3 tests).
+- Full validation: `mvn -q clean test` on Eclipse Temurin JDK 25.0.4 — passed.
+
+### Concern
+
+No external RabbitMQ broker was required or exercised; this fix is limited to compatibility logging semantics and is covered by the focused and full unit test suites.
