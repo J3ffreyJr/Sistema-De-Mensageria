@@ -7,6 +7,11 @@ import com.rabbitmq.client.Delivery;
 import config.RabbitMQConfig;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
@@ -81,6 +86,8 @@ public final class RabbitConsumer implements AutoCloseable {
         }
         try {
             newChannel.basicQos(1);
+            // Retry/DLX copies must be confirmed before the original is acked.
+            newChannel.confirmSelect();
             newChannel.basicConsume(queue, false, deliverCallback(), ignored -> { });
             channel = newChannel;
         } catch (IOException | RuntimeException failure) {
@@ -100,9 +107,8 @@ public final class RabbitConsumer implements AutoCloseable {
         Message message;
         try {
             // MessageCodec also validates the versioned contract.
-            message = codec.decode(new String(delivery.getBody(), StandardCharsets.UTF_8)
-                    .getBytes(StandardCharsets.UTF_8));
-        } catch (RuntimeException invalid) {
+            message = codec.decode(decodeUtf8(delivery.getBody()));
+        } catch (RuntimeException | CharacterCodingException invalid) {
             deadLetter(active, delivery, tag);
             return;
         }
@@ -134,6 +140,7 @@ public final class RabbitConsumer implements AutoCloseable {
                     .contentType(delivery.getProperties().getContentType())
                     .contentEncoding("UTF-8").headers(headers).deliveryMode(2).build();
             active.basicPublish(RabbitTopology.RETRY_EXCHANGE, retryKey, properties, delivery.getBody());
+            awaitConfirmation(active);
             active.basicAck(tag, false);
         } catch (IOException | RuntimeException publishFailure) {
             try { active.basicNack(tag, false, true); } catch (IOException ignored) { }
@@ -146,6 +153,7 @@ public final class RabbitConsumer implements AutoCloseable {
                     ? RabbitMQConfig.ROUTING_KEY_2 : RabbitMQConfig.ROUTING_KEY_1;
             active.basicPublish(RabbitTopology.DEAD_LETTER_EXCHANGE, routingKey,
                     delivery.getProperties(), delivery.getBody());
+            awaitConfirmation(active);
             active.basicAck(tag, false);
         } catch (IOException | RuntimeException failure) {
             try { active.basicNack(tag, false, true); } catch (IOException ignored) { }
@@ -158,6 +166,23 @@ public final class RabbitConsumer implements AutoCloseable {
         if (value instanceof Number number) return Math.max(0, number.intValue());
         try { return value == null ? 0 : Math.max(0, Integer.parseInt(value.toString())); }
         catch (NumberFormatException ignored) { return 0; }
+    }
+
+    private static byte[] decodeUtf8(byte[] body) throws CharacterCodingException {
+        CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT);
+        CharBuffer decoded = decoder.decode(ByteBuffer.wrap(body));
+        return decoded.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static void awaitConfirmation(Channel channel) throws IOException {
+        try {
+            channel.waitForConfirmsOrDie();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while waiting for broker confirmation", interrupted);
+        }
     }
 
     private static void closeQuietly(Channel channel) {

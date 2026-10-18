@@ -53,3 +53,24 @@ available during this run.
 The integration tests require a running RabbitMQ broker and are intentionally
 skipped by default. Retry delay and final routing depend on the topology
 declared by `RabbitTopology`.
+
+## Review-fix report
+
+- **Confirmed retry/dead-letter forwarding:** `RabbitConsumer` now enables
+  publisher confirms on each consumer channel. It waits for broker
+  confirmation before acknowledging either a retry copy or a dead-letter
+  copy. Any publish, confirm, channel, or interruption failure leaves the
+  original delivery unacknowledged and requeues it, preserving at-least-once
+  delivery and the existing bounded retry/DLX topology.
+- **Strict payload decoding:** payload bytes are decoded with a UTF-8
+  `CharsetDecoder` configured with `CodingErrorAction.REPORT`. Malformed byte
+  sequences are not normalized or processed; they follow the confirmed
+  dead-letter path.
+- **Broker integration coverage:** replaced the assumption-only consumer test
+  with five opt-in scenarios covering QoS/manual acknowledgements,
+  interruption and redelivery, bounded retry/exhaustion, malformed UTF-8
+  dead-lettering, and clean stop behavior. Tests purge their topology
+  resources and skip only when `-Drabbitmq.integration=true` is absent.
+- **Validation:** focused consumer integration tests and the complete Maven
+  suite both pass on JDK 25. Broker scenarios were skipped because integration
+  mode was not enabled in the validation environment.
